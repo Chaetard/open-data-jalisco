@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: odj_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: odj
+      POSTGRES_PASSWORD: odj
+      POSTGRES_DB: open_data_jalisco
+    ports:
+      - "5432:5432"
+    volumes:
+      - odj_pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odj -d open_data_jalisco"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  odj_pg_data:

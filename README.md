@@ -1,0 +1,340 @@
+# Open Data Jalisco
+
+> Información pública, verificable y consultable para una ciudadanía más informada.
+
+**Open Data Jalisco** es una iniciativa ciudadana, técnica, apartidista y open source para recopilar, preservar, organizar, consultar y verificar información pública municipal del estado de Jalisco, México.
+
+El primer piloto territorial es **Tala, Jalisco**.
+
+📜 Manifiesto completo del proyecto: [**docs/MANIFEST.md**](docs/MANIFEST.md)
+
+---
+
+## ¿Qué es?
+
+La información pública existe para ser consultada, reutilizada y entendida por la ciudadanía. En la práctica, muchos documentos públicos viven dispersos en portales distintos, formatos difíciles, archivos PDF, hojas de cálculo, páginas poco indexadas, enlaces rotos y estructuras inconsistentes.
+
+Open Data Jalisco nace para reducir esa fricción: construir una capa abierta de consulta documental sobre información pública municipal, manteniendo siempre trazabilidad hacia las fuentes oficiales.
+
+La visión es que una persona pueda preguntar:
+
+> "¿Qué contratos públicos relacionados con obra hubo en Tala durante 2021?"
+
+Y el sistema pueda responder con documentos, fechas, fuentes, enlaces oficiales, fragmentos relevantes y evidencia verificable.
+
+El objetivo **no** es sustituir a las autoridades, ni emitir acusaciones, ni interpretar políticamente la información pública. El objetivo es construir infraestructura abierta para que cualquier persona pueda consultar documentos públicos, entenderlos mejor y participar de forma más informada.
+
+---
+
+## Principios
+
+1. **Neutralidad política.** Apartidista. El sistema no asume corrupción, dolo o mala fe. Cuando detecta inconsistencias documentales las describe; no las convierte en acusaciones.
+2. **Trazabilidad documental.** La fuente de verdad no es la IA ni la base vectorial: son los documentos originales, sus URLs oficiales, fechas de captura, hashes y manifests.
+3. **Integridad y preservación.** Los documentos capturados no se modifican. Si la fuente oficial cambia un documento, se guarda una nueva versión con nuevo hash — nunca se sobrescribe la anterior.
+4. **Transparencia técnica.** Código abierto. Scrapers, pipelines, extractores, manifests y criterios de contribución son públicamente auditables.
+5. **Acceso público y gratuito.** Sujeto a límites operativos razonables (rate limits, API keys técnicas) sin convertirse en barrera comercial.
+6. **Protección de datos personales.** Que un documento sea público no significa amplificar innecesariamente datos personales. Aplican criterios de minimización, contexto y responsabilidad.
+
+Cada principio está desarrollado en detalle en el [manifiesto §3](docs/MANIFEST.md).
+
+---
+
+## Qué NO es
+
+Open Data Jalisco **no es**:
+
+- una autoridad fiscalizadora, una auditoría oficial, una fiscalía ni un tribunal;
+- una herramienta de propaganda o partidista;
+- una plataforma para acusar personas;
+- una sustitución de solicitudes formales de transparencia ni de las fuentes oficiales;
+- una garantía de completitud absoluta;
+- un sistema para publicar datos personales fuera de contexto;
+- una prueba automática de irregularidades.
+
+> La ausencia de un documento en la base no significa necesariamente que el documento no exista.
+> Una inconsistencia detectada por el sistema no significa necesariamente una irregularidad legal.
+
+El sistema puede ayudar a encontrar documentos, comparar información, detectar faltantes y señalar inconsistencias documentales. No debe convertir esas señales en conclusiones jurídicas, penales, administrativas o políticas.
+
+---
+
+## ¿Para quién?
+
+El proyecto está pensado como infraestructura útil para:
+
+- **ciudadanía** interesada en información pública municipal;
+- **estudiantes** y proyectos académicos;
+- **periodistas e investigadores**;
+- **organizaciones civiles**;
+- **desarrolladores y contribuidores** open source;
+- **servidores públicos y áreas de transparencia** que quieran reutilizar o auditar sus propios datos.
+
+La relación deseada con autoridades no es de confrontación automática, sino de consulta, verificación y mejora del acceso a información pública.
+
+---
+
+## Alcance actual
+
+- **Territorial**: Tala, Jalisco (piloto). Diseñado para crecer hacia otros municipios del estado.
+- **Documental**: contratos, licitaciones, adjudicaciones, compras y obra pública, reglamentos, actas, presupuestos, leyes de ingresos y egresos, transparencia activa, directorios institucionales, gacetas y portales oficiales municipales.
+
+Nuevas fuentes se incorporan mediante configuración versionada (YAML), no por modificación del código de producción. Esto mantiene la incorporación auditable y replicable.
+
+---
+
+## Estado del proyecto
+
+Etapa temprana. MVP funcional con:
+
+- ingesta de documentos públicos vía scrapers configurables (`generic_http`, `sapumu_content`);
+- descubrimiento conservador de páginas SAPUMU (`sapumu scan`) sin descargar documentos;
+- inspección offline de candidatos descubiertos (`discovered inspect`);
+- ingesta controlada desde candidatos con filtros y bloqueo de categorías sensibles (`discovered ingest`);
+- preservación con hash SHA-256 y versionado por URL;
+- extracción de texto + chunking + embeddings (provider `dummy` por defecto, sin API key);
+- búsqueda semántica vía pgvector;
+- manifests de integridad reproducibles;
+- API HTTP + CLI.
+
+Lo que aún no está expuesto al consumidor: descarga de blobs originales desde la API (se usa el `official_url` de la fuente), autenticación, panel de auditoría visual, OCR.
+
+---
+
+## Inteligencia artificial: principio de operación
+
+Cuando exista una interfaz conversacional o asistida por IA, operará bajo un principio estricto:
+
+> El asistente no debe responder afirmaciones sustantivas sin respaldo documental recuperado.
+
+El asistente podrá explicar documentos, resumir contratos, comparar fuentes, señalar inconsistencias documentales e indicar qué evidencia encontró o no encontró. No podrá inventar fuentes, asumir corrupción, acusar personas, inferir delitos, presentar texto generado como documento oficial ni sustituir asesoría legal o auditoría formal.
+
+La IA es **interfaz de consulta asistida, no autoridad factual**. Detalle en [manifiesto §7](docs/MANIFEST.md).
+
+---
+
+## Open source
+
+El software se publica bajo la licencia **GNU Affero General Public License v3.0 (AGPLv3)**, salvo componentes específicos que indiquen otra cosa.
+
+La elección de AGPLv3 mantiene el proyecto abierto incluso cuando se ofrezca como servicio web: si una persona u organización modifica el software y lo publica como servicio, deberá publicar también sus modificaciones bajo los mismos términos.
+
+Los documentos oficiales recopilados **no son propiedad del proyecto**. Open Data Jalisco no se atribuye autoría sobre documentos gubernamentales, reglamentos, actas, contratos, licitaciones o archivos emitidos por autoridades públicas. El proyecto los **preserva, referencia, procesa e indexa** con fines de consulta, trazabilidad, investigación, participación ciudadana y reutilización técnica.
+
+---
+
+## Contribuir
+
+Se aceptan contribuciones por pull requests, issues, reportes, documentación, mejoras técnicas, nuevos scrapers, validaciones de fuentes y pruebas.
+
+**Contribuciones bienvenidas**:
+
+- nuevas configuraciones de municipios (YAML en `datasets/sources/`);
+- mejoras en scrapers, parsers y extractores de texto;
+- chunking semántico;
+- tests y validaciones de integridad;
+- documentación y accesibilidad;
+- mejoras de seguridad.
+
+**No aceptables**:
+
+- insertar documentos no verificables como si fueran oficiales;
+- modificar hashes históricos o alterar documentos raw;
+- eliminar evidencia sin justificación;
+- agregar inferencias políticas como metadata factual;
+- exponer datos personales fuera de contexto;
+- romper la trazabilidad hacia las fuentes oficiales.
+
+Las contribuciones no tienen acceso directo a la base oficial de producción. Detalle completo en [manifiesto §10](docs/MANIFEST.md).
+
+---
+
+## Sostenibilidad
+
+El proyecto podrá aceptar donaciones voluntarias para cubrir costos técnicos (infraestructura, almacenamiento, dominios, procesamiento documental, OCR, bases de datos, monitoreo, mantenimiento, seguridad). Las donaciones, si existen, no comprometerán la neutralidad del proyecto ni convertirán el sistema en una herramienta partidista.
+
+---
+
+## Documentación
+
+| Documento | Contenido |
+|---|---|
+| 📜 [docs/MANIFEST.md](docs/MANIFEST.md) | Manifiesto completo: propósito, principios, gobernanza, alcance, IA, contribuciones, sostenibilidad. |
+| 🖥️ [docs/FRONTEND_GUIDE.md](docs/FRONTEND_GUIDE.md) | Guía de integración frontend: endpoints, ejemplos JSON, flujos de prueba. |
+| 🧪 `--help` en CLI | Cada comando documenta sus opciones: `uv run open-data-jalisco --help`, `... sapumu --help`, `... discovered --help`. |
+
+---
+
+## Frase guía
+
+> Open Data Jalisco no busca reemplazar a las instituciones. Busca que la información pública sea más accesible, más trazable y más útil para la sociedad.
+
+---
+---
+
+# Sección técnica
+
+Lo necesario para correr el MVP local. Esta sección está al final intencionalmente: la prioridad del README es el propósito del proyecto.
+
+## Stack
+
+- Python 3.12 + FastAPI + Typer
+- SQLAlchemy 2 + psycopg + PostgreSQL con pgvector
+- `uv` para gestión de dependencias
+- pytest para tests
+- Arquitectura hexagonal: `domain/`, `ports/`, `adapters/`, más una capa fina de `api/` y `cli.py`
+
+## Estructura
+
+```
+open-data-jalisco/
+  apps/api/main.py              # entrypoint para uvicorn
+  src/open_data_jalisco/
+    domain/                     # dataclasses: Source, Document, Chunk, enums
+    ports/                      # protocols (Repository, EmbeddingProvider, ...)
+    adapters/                   # implementaciones: postgres, fs local, embedder dummy, scrapers
+    api/                        # FastAPI app, routers, schemas, deps
+    discovery/                  # sapumu scan + candidates inspect + candidates ingest
+    ingestion/                  # loader de YAML, use case de ingesta
+    processing/                 # extracción + chunking + embedding
+    manifests/                  # generador de manifests de integridad
+    shared/                     # config, logging, hashing, time
+    cli.py                      # CLI `odj` / `open-data-jalisco`
+  configs/                      # plantillas YAML (sin URLs reales)
+  datasets/
+    sources/                    # configs de fuentes activas (YAML)
+    discovered/                 # candidatos descubiertos por sapumu scan
+    manifests/                  # manifests generados (JSON)
+  docs/                         # manifiesto + guía frontend
+  infra/postgres/init.sql       # pgvector + bootstrap del schema
+  tests/unit/                   # sin DB, sin red
+  tests/integration/            # ejercitan API + DB
+```
+
+## Setup
+
+El proyecto fija Python **3.12** vía `.python-version`. No uses tu Python del sistema — deja que `uv` provisione el intérprete.
+
+### Linux / macOS
+
+```bash
+cp .env.example .env
+uv python install 3.12
+uv venv --python 3.12
+uv sync --extra dev
+make db-up                       # Postgres + pgvector
+make init-db                     # crear schema (idempotente)
+```
+
+### Windows (PowerShell)
+
+```powershell
+Copy-Item .env.example .env
+uv python install 3.12
+uv venv --python 3.12
+uv sync --extra dev
+# o todo en uno:
+.\scripts\bootstrap.ps1
+
+docker compose up -d postgres
+uv run open-data-jalisco db init
+```
+
+> En Windows usa siempre `uv run ...`. Ejecutar `python -m pytest` directamente toma el Python del sistema (típicamente 3.13) en vez del `.venv` del proyecto (3.12) y rompe imports.
+
+El CLI está registrado bajo dos nombres equivalentes:
+
+```bash
+uv run open-data-jalisco --help              # preferido
+uv run python -m open_data_jalisco.cli --help # equivalente
+uv run odj --help                             # alias corto
+```
+
+## API
+
+```bash
+make api          # uvicorn apps.api.main:app --reload
+```
+
+Endpoints expuestos:
+
+| Método | Ruta | Notas |
+|---|---|---|
+| GET | `/health` | Liveness + versión |
+| GET | `/sources` | Lista de fuentes |
+| GET | `/sources/{slug}` | Detalle de una fuente |
+| GET | `/documents` | Lista filtrable (source_id, municipality, year) |
+| GET | `/documents/{id}` | Detalle de un documento |
+| GET | `/documents/{id}/chunks` | Chunks de texto extraídos |
+| POST | `/search` | Búsqueda semántica (preferido) |
+| GET | `/search?q=...` | Alias GET para deep-links |
+| POST | `/semantic-search` | Alias explícito de POST /search |
+| GET | `/manifests` | Lista manifests en disco |
+
+Documentación interactiva en `GET /docs` (Swagger) y `GET /redoc`. Detalle de cada endpoint con ejemplos JSON: [**docs/FRONTEND_GUIDE.md**](docs/FRONTEND_GUIDE.md).
+
+## CLI — flujos principales
+
+```bash
+# Listar fuentes definidas en datasets/sources/*.yaml
+uv run open-data-jalisco sources list
+
+# 1) Descubrir páginas SAPUMU (sin descargar nada)
+uv run open-data-jalisco sapumu scan tala \
+    --section articulo_8 --from-id 1 --to-id 100 \
+    --output datasets/discovered/tala/articulo_8_candidates.json
+
+# 2) Inspeccionar candidatos descubiertos (offline)
+uv run open-data-jalisco discovered inspect \
+    datasets/discovered/tala/articulo_8_candidates.json \
+    --year 2025 --extension pdf
+
+# 3) Ingesta controlada desde candidatos
+uv run open-data-jalisco discovered ingest \
+    datasets/discovered/tala/articulo_8_candidates.json \
+    --source tala --content-id 63 --year 2025 --extension pdf \
+    --limit 10 --dry-run
+
+# Ingesta clásica de una fuente completa
+uv run open-data-jalisco ingest tala --limit 5 --dry-run
+uv run open-data-jalisco ingest tala --limit 5
+
+# Procesar documentos pendientes (extraer texto + chunkear + embeber)
+uv run open-data-jalisco process --limit 50
+
+# Generar manifest de integridad (datasets/manifests/<slug>_*.json)
+uv run open-data-jalisco manifest tala
+```
+
+Cada comando documenta sus opciones con `--help`. Conviene leer al menos `sapumu scan --help`, `discovered inspect --help`, `discovered ingest --help` antes de la primera corrida real.
+
+## Tests
+
+```bash
+make test                # suite completa
+make test-unit           # sin DB, sin red
+make test-integration    # requiere Postgres arriba
+```
+
+Los tests unitarios usan `dependency_overrides` de FastAPI con repositorios y embedder fake — nunca tocan red ni base de datos.
+
+## Configuración
+
+Toda la configuración runtime es via `.env` (gestionada por `pydantic-settings`). Variables relevantes:
+
+| Variable | Default |
+|---|---|
+| `DATABASE_URL` | `postgresql+psycopg://odj:odj@localhost:5432/open_data_jalisco` |
+| `RAW_STORAGE_PATH` | `./data/raw` |
+| `MANIFESTS_DIR` | `./datasets/manifests` |
+| `EMBEDDING_PROVIDER` | `dummy` (determinístico, sin API) |
+| `EMBEDDING_DIMENSION` | `384` |
+| `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` |
+
+`EMBEDDING_PROVIDER=dummy` produce vectores determinísticos desde el hash del texto — sin API keys, sin red. Providers reales se implementan detrás del puerto `EmbeddingProvider` en `src/open_data_jalisco/adapters/embeddings/`.
+
+## Notas técnicas adicionales
+
+- **Extractores soportados**: PDF (`pypdf`, los escaneados sin capa de texto van a `needs_ocr`), XLSX/XLSM (`openpyxl` read-only, una página por hoja no vacía), HTML (`trafilatura` + `beautifulsoup4`), plaintext/CSV/Markdown vía stdlib.
+- **Inferencia de año/mes**: cuando el YAML no provee `year`, se infiere de URLs con forma `/<...>/YYYY/MM/<...>`. El valor aterriza en `Document.year` y `Document.metadata` (`inferred_month`, `year_inferred_from_url`).
+- **Scrapers**: `generic_http` cubre portales con `direct_documents` + descubrimiento superficial sobre `seed_urls`; `sapumu_content` cubre portales SAPUMU parseando el JSON embebido en `<level-content :content="...">`. Ambos comparten allow-lists, deduplicación y semántica de `--limit`.
+- **Plantillas en `configs/`**: contienen URLs placeholder. Si una URL conserva fragmentos como `example.invalid`, `REEMPLAZAR` o `<replace>`, la ingesta falla con `PlaceholderUrlError` antes de tocar la red o la DB.

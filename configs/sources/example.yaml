@@ -1,0 +1,36 @@
+# Source configuration — TEMPLATE
+#
+# This file is a structural template. Do not put real URLs here.
+# Copy this file to `configs/sources/<your-slug>.yaml` (or to
+# `datasets/sources/<slug>.yaml` for runtime ingestion) and fill in the
+# placeholders with verified values.
+#
+# Field reference: src/open_data_jalisco/ingestion/source_loader.py
+# (`SourceConfig` pydantic model).
+
+slug: example-source
+name: "Example documental source"
+kind: other                       # one of: municipal_portal | state_transparency_portal |
+                                  #         national_transparency_platform | gazette | other
+municipality: "<municipality-name>"
+official_url: "https://example.invalid/REPLACE"
+description: |
+  Short technical description of what this source publishes.
+is_active: false                  # keep false until URLs are verified.
+
+metadata:
+  state: "<state-code>"
+  country: "<country-code>"
+  notes: "Template only. Replace before activating."
+
+scraper:
+  type: generic_http
+  documents: []
+    # Example shape (do NOT activate without real URLs):
+    # - url: "https://example.invalid/path/file.pdf"
+    #   title: "Example title"
+    #   document_type: other        # contract | bidding | award | regulation |
+    #                               # minutes | budget | financial_report | other | unknown
+    #   year: 2024
+    #   metadata:
+    #     external_id: "EXT-0001"

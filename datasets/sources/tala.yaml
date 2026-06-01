@@ -1,0 +1,95 @@
+# Source: Tala (SAPUMU portal).
+#
+# This source uses the `sapumu_content` scraper, which:
+#   1. Fetches each URL listed under `content_pages` (no recursion).
+#   2. Parses the embedded <level-content :content="..."> JSON in each.
+#   3. Emits documents from grouped_media[].months[].files[].
+#   4. Optionally also pulls explicit URLs from `direct_documents`.
+#
+# Discovery tool (no DB writes, no PDF downloads, conservative range):
+#   uv run python -m open_data_jalisco.cli sapumu scan-content tala \
+#     --from-id 1 --to-id 100 --dry-run
+#   uv run python -m open_data_jalisco.cli sapumu scan-content tala \
+#     --from-id 1 --to-id 100 --output datasets/sources/tala_candidates.yaml
+#
+# Ingestion:
+#   uv run python -m open_data_jalisco.cli ingest tala --limit 20 --dry-run
+#   uv run python -m open_data_jalisco.cli ingest tala --limit 20
+
+slug: tala
+name: "Tala (SAPUMU portal)"
+kind: municipal_portal
+municipality: Tala
+official_url: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+description: |
+  Municipal source served from the SAPUMU portal. Documents are exposed
+  through Laravel/Vue content pages of the form `/contenido/{id}`; each page
+  carries a `<level-content :content="...">` JSON payload listing the
+  attached files.
+is_active: true
+
+metadata:
+  state: "Jalisco"
+  country: "MX"
+
+scraper:
+  type: sapumu_content
+  allowed_domains:
+    - tala.sapumu.com
+    - app-sapumu.sfo2.digitaloceanspaces.com
+  document_extensions:
+    - pdf
+    - xlsx
+    - xls
+    - csv
+    - docx
+
+  # Pages to parse during `ingest`. Add IDs discovered via `sapumu scan-content`.
+  content_pages:
+    - "https://tala.sapumu.com/municipio/transparencia/articulo-8/contenido/63"
+
+  # Template used by `sapumu scan-content` (not by ingest directly).
+  content_page_template: "https://tala.sapumu.com/municipio/transparencia/articulo-8/contenido/{id}"
+
+  # Section-keyed templates used by `sapumu scan <slug> --section <key>`.
+  # If a section is requested that isn't here, scan falls back to
+  # `content_page_template`.
+  section_templates:
+    articulo_8: "https://tala.sapumu.com/municipio/transparencia/articulo-8/contenido/{id}"
+
+  # Manual fallback — explicit URLs that have been verified by hand.
+  direct_documents:
+    - url: "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2026/01/4035/12FRgcZ9dm.pdf"
+      title: "Documento SAPUMU Tala 2026-01 4035"
+      document_type: other
+      metadata:
+        source_page: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+        notes: "URL verificada manualmente."
+
+    - url: "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2026/01/3998/Hl00mrmMdH.xlsx"
+      title: "Documento SAPUMU Tala 2026-01 3998"
+      document_type: other
+      metadata:
+        source_page: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+        notes: "URL verificada manualmente."
+
+    - url: "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/12/3700/3TNsAVWHYZ.pdf"
+      title: "Documento SAPUMU Tala 2025-12 3700"
+      document_type: other
+      metadata:
+        source_page: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+        notes: "URL verificada manualmente."
+
+    - url: "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/11/2743/VYx464GjY1.pdf"
+      title: "Documento SAPUMU Tala 2025-11 2743"
+      document_type: other
+      metadata:
+        source_page: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+        notes: "URL verificada manualmente."
+
+    - url: "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/10/55/qW7ACsfgAX.pdf"
+      title: "Documento SAPUMU Tala 2025-10 55"
+      document_type: other
+      metadata:
+        source_page: "https://tala.sapumu.com/municipio/transparencia/articulo-8"
+        notes: "URL verificada manualmente."

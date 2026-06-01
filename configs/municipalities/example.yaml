@@ -1,0 +1,19 @@
+# Municipality configuration — TEMPLATE
+#
+# This file groups source slugs (from configs/sources/ or datasets/sources/)
+# under a single municipality. The application does not hardcode any specific
+# municipality; values here are placeholders.
+
+slug: example-municipality
+name: "<municipality-name>"
+state: "<state-code>"
+country: "<country-code>"
+is_active: false
+
+# References to source configs by slug. Each entry must match a `slug` field
+# in a YAML file under configs/sources/ or datasets/sources/.
+sources:
+  - example-source
+
+metadata:
+  notes: "Template only. Replace placeholders before activating."
