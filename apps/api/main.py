@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Thin process entry point for the FastAPI application.
 
 The real implementation lives in ``open_data_jalisco.api.app``. This module

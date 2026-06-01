@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Pure parser for SAPUMU content pages (Laravel/Vue Blade).
 
 A SAPUMU content page embeds its document list inside a Vue component::

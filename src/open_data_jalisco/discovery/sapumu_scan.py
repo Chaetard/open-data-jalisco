@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Conservative SAPUMU content-page discovery.
 
 Iterates over an explicit ID range (``--from-id``..``--to-id``), fetches each

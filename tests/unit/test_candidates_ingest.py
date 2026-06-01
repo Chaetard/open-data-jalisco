@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Tests for the `discovered ingest` flow: filtering, validation, plan-entry
 shape, and the use case's `execute_from_entries` path.
 

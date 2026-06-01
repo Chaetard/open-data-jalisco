@@ -48,9 +48,9 @@ open-data-jalisco = "open_data_jalisco.cli:app"
 odj = "open_data_jalisco.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/your-org/open-data-jalisco"
-Repository = "https://github.com/your-org/open-data-jalisco"
-Issues = "https://github.com/your-org/open-data-jalisco/issues"
+Homepage = "https://odj.n0kemm.dev/"
+Repository = "https://github.com/Chaetard/open-data-jalisco"
+Issues = "https://github.com/Chaetard/open-data-jalisco/issues"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from .ingest_source import IngestionResult, IngestSourceUseCase, PlaceholderUrlError
 from .source_loader import (
     SourceConfig,

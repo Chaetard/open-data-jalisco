@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from open_data_jalisco.ports.text_extractor import ExtractedDocument, ExtractedPage
 from open_data_jalisco.processing.chunker import StructureAwareChunker
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from datetime import datetime, timezone
 
 from open_data_jalisco.adapters.storage.local_filesystem import LocalFilesystemRawStorage

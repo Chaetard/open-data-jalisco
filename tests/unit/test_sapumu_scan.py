@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Tests for the SAPUMU discovery (``sapumu scan-content``) logic."""
 from __future__ import annotations
 

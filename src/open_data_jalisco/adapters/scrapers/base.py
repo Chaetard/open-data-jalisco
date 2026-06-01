@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlparse

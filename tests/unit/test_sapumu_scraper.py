@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Tests for SapumuContentScraper — plan() with content_pages, dedup, validation, limit.
 
 HTML is injected via ``html_fetcher`` so no network calls happen.

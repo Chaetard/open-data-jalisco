@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from fastapi import FastAPI
 
 from .. import __version__
 from ..shared.config import get_settings
 from ..shared.logging import configure_logging
-from .routers import documents, health, manifests, search, sources
+from .routers import documents, health, manifests, search, source, sources
 
 
 def create_app() -> FastAPI:
@@ -19,6 +22,7 @@ def create_app() -> FastAPI:
         ),
     )
     app.include_router(health.router)
+    app.include_router(source.router)
     app.include_router(sources.router, prefix="/sources", tags=["sources"])
     app.include_router(documents.router, prefix="/documents", tags=["documents"])
     app.include_router(search.router, prefix="/search", tags=["search"])

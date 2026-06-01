@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Scraper for SAPUMU content pages.
 
 A SAPUMU content page (e.g. ``https://<municipio>.sapumu.com/.../contenido/63``)

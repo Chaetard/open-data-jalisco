@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Test-only fakes that satisfy the hexagonal ports without touching DB or network."""
 from __future__ import annotations
 

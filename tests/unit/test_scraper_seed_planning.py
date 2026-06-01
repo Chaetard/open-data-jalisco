@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Tests for GenericHttpScraper.plan() — direct + seed combination, dedup, limit.
 
 HTML is injected via the ``html_fetcher`` constructor parameter so these tests

@@ -2,6 +2,8 @@
 
 > Información pública, verificable y consultable para una ciudadanía más informada.
 
+🌐 Sitio oficial: <https://odj.n0kemm.dev/> · 💻 Código fuente: <https://github.com/Chaetard/open-data-jalisco>
+
 **Open Data Jalisco** es una iniciativa ciudadana, técnica, apartidista y open source para recopilar, preservar, organizar, consultar y verificar información pública municipal del estado de Jalisco, México.
 
 El primer piloto territorial es **Tala, Jalisco**.
@@ -114,9 +116,15 @@ La IA es **interfaz de consulta asistida, no autoridad factual**. Detalle en [ma
 
 ## Open source
 
-El software se publica bajo la licencia **GNU Affero General Public License v3.0 (AGPLv3)**, salvo componentes específicos que indiquen otra cosa.
+El software se publica bajo la licencia **GNU Affero General Public License v3.0 o posterior (AGPL-3.0-or-later)**. El texto completo está en el archivo [`LICENSE`](LICENSE) de este repositorio.
 
 La elección de AGPLv3 mantiene el proyecto abierto incluso cuando se ofrezca como servicio web: si una persona u organización modifica el software y lo publica como servicio, deberá publicar también sus modificaciones bajo los mismos términos.
+
+### Aviso de uso en red (AGPLv3 §13)
+
+Cuando este software se opera como servicio accesible por red, la AGPLv3 requiere que las personas usuarias puedan obtener el código fuente correspondiente a la versión en ejecución, incluidas modificaciones. El código fuente oficial está disponible en el repositorio del proyecto: <https://github.com/Chaetard/open-data-jalisco>. Adicionalmente, toda instancia expone el endpoint `GET /source`, que devuelve la URL del repositorio, la versión publicada y, si está configurado, el commit en ejecución. Cualquier operador de una instancia modificada debe ofrecer públicamente el código fuente de su versión bajo los mismos términos de la AGPLv3.
+
+### Documentos oficiales recopilados
 
 Los documentos oficiales recopilados **no son propiedad del proyecto**. Open Data Jalisco no se atribuye autoría sobre documentos gubernamentales, reglamentos, actas, contratos, licitaciones o archivos emitidos por autoridades públicas. El proyecto los **preserva, referencia, procesa e indexa** con fines de consulta, trazabilidad, investigación, participación ciudadana y reutilización técnica.
 

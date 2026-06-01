@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Pure HTML link discovery for shallow seed pages.
 
 No network. No I/O. Given an HTML string and a base URL, returns the set of

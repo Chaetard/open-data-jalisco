@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Unit tests for the ingest use case: dry-run, limit, validation, placeholder rejection.
 
 No network, no DB: all collaborators are in-memory fakes.

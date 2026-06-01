@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Inspect a discovered-candidates JSON file produced by ``sapumu scan``.
 
 Pure logic only: loading is a thin JSON read, everything else is offline

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from fastapi.testclient import TestClient
 
 from open_data_jalisco.api.app import create_app

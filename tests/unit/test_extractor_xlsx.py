@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Unit tests for the XLSX text extractor.
 
 XLSX fixtures are written to ``tmp_path`` with openpyxl in write mode; the

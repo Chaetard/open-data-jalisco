@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Convert discovered candidates into ScraperPlanEntry list, with filters.
 
 This is the bridge between ``sapumu scan`` (offline discovery) and the

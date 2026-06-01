@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Reusable URL validation for scraper configs.
 
 Shared between the actual scraper (which uses it to skip URLs before fetching)

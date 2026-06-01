@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 from open_data_jalisco.adapters.scrapers._validation import is_url_allowed
 
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 open-data-jalisco contributors
+
 """Verify ProcessDocumentsUseCase forwards retry_failed to the repo correctly."""
 from __future__ import annotations
 
