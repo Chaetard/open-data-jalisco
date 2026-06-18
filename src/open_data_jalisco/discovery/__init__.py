@@ -5,6 +5,7 @@ from .candidates_ingest import (
     SENSITIVE_CONTENT_IDS,
     CandidateIngestError,
     CandidateIngestFilter,
+    filter_out_known_urls,
     select_entries,
 )
 from .candidates_inspect import (
@@ -40,6 +41,7 @@ __all__ = [
     "apply_filters",
     "build_report",
     "export_candidates",
+    "filter_out_known_urls",
     "load_candidates",
     "scan_content_pages",
     "select_entries",

@@ -51,6 +51,272 @@ def db_init() -> None:
     console.print("[green]DB inicializada.[/green]")
 
 
+@db_app.command("reset-chunks")
+def db_reset_chunks(
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="No pedir confirmación."),
+    ] = False,
+) -> None:
+    """Borra todos los chunks y marca los documentos como `pending`.
+
+    Útil al cambiar de proveedor o modelo de embeddings (los vectores ya
+    persistidos quedan en una dimensión/semántica distinta a la nueva). Los
+    documentos `raw` y los `sources` NO se tocan: sólo se invalida el índice
+    semántico para que la próxima corrida de ``process`` los re-procese.
+    """
+    from sqlalchemy import delete, update
+
+    from .adapters.persistence import get_session_factory
+    from .adapters.persistence.models import ChunkORM, DocumentORM
+    from .domain.enums import ProcessingStatus
+
+    if not yes:
+        confirmed = typer.confirm(
+            "Esto borrará TODOS los chunks y marcará los documentos como pending. "
+            "¿Continuar?"
+        )
+        if not confirmed:
+            console.print("[yellow]Cancelado.[/yellow]")
+            raise typer.Exit(code=1)
+
+    sf = get_session_factory()
+    with sf() as session:
+        deleted = session.execute(delete(ChunkORM)).rowcount or 0
+        updated = (
+            session.execute(
+                update(DocumentORM)
+                .where(DocumentORM.processing_status != ProcessingStatus.PENDING.value)
+                .values(
+                    processing_status=ProcessingStatus.PENDING.value,
+                    extraction_error=None,
+                )
+            ).rowcount
+            or 0
+        )
+        session.commit()
+
+    console.print(
+        f"[green]Reset OK.[/green] chunks_borrados={deleted} "
+        f"documentos_re-marcados={updated}"
+    )
+
+
+@db_app.command("stats")
+def db_stats() -> None:
+    """Imprime el estado del índice: docs por status, chunks, sha256 únicos.
+
+    Útil para monitorear corridas largas de ``process`` desde otra terminal
+    sin tocar la principal — sólo lee, no escribe.
+    """
+    from sqlalchemy import func, select
+
+    from .adapters.persistence import get_session_factory
+    from .adapters.persistence.models import ChunkORM, DocumentORM, SourceORM
+
+    sf = get_session_factory()
+    with sf() as session:
+        table = Table("status", "documentos", title="Documentos por status (is_current=true)")
+        rows = session.execute(
+            select(DocumentORM.processing_status, func.count())
+            .where(DocumentORM.is_current.is_(True))
+            .group_by(DocumentORM.processing_status)
+            .order_by(DocumentORM.processing_status)
+        ).all()
+        total = 0
+        for status, n in rows:
+            table.add_row(status, str(n))
+            total += n
+        table.add_row("[bold]TOTAL[/bold]", f"[bold]{total}[/bold]")
+        console.print(table)
+
+        n_chunks = session.scalar(select(func.count()).select_from(ChunkORM)) or 0
+        n_unique_sha = (
+            session.scalar(select(func.count(func.distinct(ChunkORM.sha256)))) or 0
+        )
+        console.print(
+            f"chunks: [bold]{n_chunks:,}[/bold]    "
+            f"documentos únicos (por sha256): [bold]{n_unique_sha}[/bold]"
+        )
+
+        per_source = session.execute(
+            select(SourceORM.slug, func.count(DocumentORM.id))
+            .join(DocumentORM, DocumentORM.source_id == SourceORM.id, isouter=True)
+            .where(DocumentORM.is_current.is_(True))
+            .group_by(SourceORM.slug)
+            .order_by(SourceORM.slug)
+        ).all()
+        if per_source:
+            src_table = Table("source", "documentos", title="Por fuente")
+            for slug, n in per_source:
+                src_table.add_row(slug, str(n))
+            console.print(src_table)
+
+
+@db_app.command("documents")
+def db_documents(
+    status: Annotated[
+        str | None,
+        typer.Option(
+            "--status",
+            help="Filtrar por processing_status (ej. indexed, pending, needs_ocr, failed).",
+        ),
+    ] = "indexed",
+    source: Annotated[
+        str | None,
+        typer.Option("--source", help="Filtrar por slug de la fuente."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=1, max=10000, help="Máximo de filas a mostrar."),
+    ] = 50,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", min=0, help="Saltar las primeras N filas (paginación)."),
+    ] = 0,
+    unique_only: Annotated[
+        bool,
+        typer.Option(
+            "--unique-only/--all",
+            help=(
+                "Si está activo, colapsa duplicados por sha256 (un PDF "
+                "republicado en N URLs cuenta una vez)."
+            ),
+        ),
+    ] = True,
+    fmt: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            "-f",
+            help="Formato de salida: 'table' (default), 'json' (parseable, ej. para `jq`).",
+        ),
+    ] = "table",
+) -> None:
+    """Lista documentos current en la DB, filtrables por status/fuente.
+
+    Por defecto muestra los `indexed` (los que ya están en el índice semántico)
+    deduplicados por sha256. Útil para auditar qué cubre realmente tu buscador
+    o para exportar listas para reportes.
+    """
+    from sqlalchemy import func, select
+
+    from .adapters.persistence import get_session_factory
+    from .adapters.persistence.models import DocumentORM, SourceORM
+
+    sf = get_session_factory()
+    with sf() as session:
+        base = (
+            select(
+                DocumentORM.id.label("id"),
+                DocumentORM.title.label("title"),
+                DocumentORM.year.label("year"),
+                DocumentORM.processing_status.label("status"),
+                DocumentORM.file_size.label("file_size"),
+                DocumentORM.sha256.label("sha256"),
+                DocumentORM.official_url.label("official_url"),
+                DocumentORM.captured_at.label("captured_at"),
+                SourceORM.slug.label("source"),
+            )
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .where(DocumentORM.is_current.is_(True))
+        )
+        if status is not None:
+            base = base.where(DocumentORM.processing_status == status)
+        if source is not None:
+            base = base.where(SourceORM.slug == source)
+
+        if unique_only:
+            # Postgres DISTINCT ON requires the leading ORDER BY column to match,
+            # so we pick "earliest captured per sha256" inside a subquery, then
+            # re-order in the outer query for display.
+            inner = base.distinct(DocumentORM.sha256).order_by(
+                DocumentORM.sha256, DocumentORM.captured_at.asc()
+            ).subquery()
+            stmt = (
+                select(inner)
+                .order_by(inner.c.year.desc().nulls_last(), inner.c.title.asc())
+                .limit(limit)
+                .offset(offset)
+            )
+        else:
+            stmt = base.order_by(
+                DocumentORM.year.desc().nulls_last(), DocumentORM.title.asc()
+            ).limit(limit).offset(offset)
+
+        rows = session.execute(stmt).all()
+
+        # Also: total count for the same filter set (without limit/offset)
+        count_stmt = (
+            select(func.count(func.distinct(DocumentORM.sha256)) if unique_only else func.count())
+            .select_from(DocumentORM)
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .where(DocumentORM.is_current.is_(True))
+        )
+        if status is not None:
+            count_stmt = count_stmt.where(DocumentORM.processing_status == status)
+        if source is not None:
+            count_stmt = count_stmt.where(SourceORM.slug == source)
+        total_matching = session.scalar(count_stmt) or 0
+
+    if fmt == "json":
+        payload = [
+            {
+                "id": str(r._mapping["id"]),
+                "title": r._mapping["title"],
+                "year": r._mapping["year"],
+                "status": r._mapping["status"],
+                "file_size": r._mapping["file_size"],
+                "sha256": r._mapping["sha256"],
+                "official_url": r._mapping["official_url"],
+                "source": r._mapping["source"],
+            }
+            for r in rows
+        ]
+        console.print_json(
+            data={
+                "filter": {
+                    "status": status,
+                    "source": source,
+                    "unique_only": unique_only,
+                },
+                "total_matching": total_matching,
+                "returned": len(payload),
+                "offset": offset,
+                "documents": payload,
+            }
+        )
+        return
+
+    table = Table(
+        "year", "source", "status", "size", "title", "url",
+        title=(
+            f"Documentos (status={status or 'cualquiera'}, "
+            f"{'únicos' if unique_only else 'todos'}) "
+            f"— mostrando {len(rows)} de {total_matching}"
+        ),
+    )
+    for r in rows:
+        m = r._mapping
+        size_kb = f"{(m['file_size'] or 0) / 1024:.0f} KB"
+        title_short = (m["title"] or "")[:70]
+        url_short = (m["official_url"] or "")[:60]
+        table.add_row(
+            str(m["year"] or "—"),
+            m["source"] or "—",
+            m["status"] or "—",
+            size_kb,
+            title_short,
+            url_short,
+        )
+    console.print(table)
+    if total_matching > offset + len(rows):
+        remaining = total_matching - (offset + len(rows))
+        console.print(
+            f"[dim]... y {remaining} más. Usá --offset {offset + limit} para paginar.[/dim]"
+        )
+
+
 @sources_app.command("list")
 def sources_list() -> None:
     """Lista las fuentes definidas en datasets/sources/*.yaml."""
@@ -201,7 +467,7 @@ def search(
     chunk_repo = PostgresChunkRepository(sf)
     doc_repo = PostgresDocumentRepository(sf)
     embedder = build_embedding_provider()
-    [vec] = embedder.embed([query])
+    vec = embedder.embed_query(query)
     results = chunk_repo.semantic_search(vec, limit=limit, municipality=municipality)
 
     payload = []
@@ -799,9 +1065,17 @@ def discovered_ingest(
         ),
     ] = None,
     limit: Annotated[
-        int,
-        typer.Option("--limit", min=1, max=1000, help="Tope de documentos a ingestar."),
-    ] = 10,
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            max=10000,
+            help=(
+                "Tope de documentos a ingestar. Si se omite, no hay tope: "
+                "se ingesta TODO lo que pase los filtros."
+            ),
+        ),
+    ] = None,
     allow_sensitive_content: Annotated[
         bool,
         typer.Option(
@@ -812,6 +1086,18 @@ def discovered_ingest(
             ),
         ),
     ] = False,
+    skip_existing_urls: Annotated[
+        bool,
+        typer.Option(
+            "--skip-existing-urls/--no-skip-existing-urls",
+            help=(
+                "Saltar URLs que ya están en la DB sin re-descargar los bytes "
+                "(default). Útil para retomar una ingesta masiva sin perder "
+                "tiempo en lo ya bajado. Usa `--no-skip-existing-urls` para "
+                "forzar refetch (necesario si sospechas que el upstream cambió)."
+            ),
+        ),
+    ] = True,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -836,6 +1122,7 @@ def discovered_ingest(
         CandidateIngestError,
         CandidateIngestFilter,
         CandidatesInspectError,
+        filter_out_known_urls,
         load_candidates,
         select_entries,
     )
@@ -929,16 +1216,40 @@ def discovered_ingest(
 
     # Real run: only now do we wire up DB + storage. Keeps dry-run free of
     # any persistence-tier dependency (no DATABASE_URL needed to dry-run).
+    from sqlalchemy import select as sa_select
+
     from .adapters.persistence import (
         PostgresDocumentRepository,
         PostgresSourceRepository,
         get_session_factory,
     )
+    from .adapters.persistence.models import DocumentORM, SourceORM
     from .adapters.storage.local_filesystem import LocalFilesystemRawStorage
     from .ingestion import IngestSourceUseCase, PlaceholderUrlError
 
     settings = get_settings()
     sf = get_session_factory()
+
+    pre_skipped: list[dict[str, str]] = []
+    if skip_existing_urls:
+        with sf() as session:
+            known_urls = set(
+                session.scalars(
+                    sa_select(DocumentORM.official_url)
+                    .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+                    .where(
+                        SourceORM.slug == source,
+                        DocumentORM.is_current.is_(True),
+                    )
+                ).all()
+            )
+        entries, pre_skipped = filter_out_known_urls(entries, known_urls)
+        if pre_skipped:
+            console.print(
+                f"[cyan]skip-existing-urls: omitiendo {len(pre_skipped)} URLs "
+                f"que ya están en la DB (no se re-descargan).[/cyan]"
+            )
+
     use_case = IngestSourceUseCase(
         source_repo=PostgresSourceRepository(sf),
         document_repo=PostgresDocumentRepository(sf),
@@ -964,6 +1275,7 @@ def discovered_ingest(
         "documents_versioned": result.documents_versioned,
         "documents_unchanged": result.documents_unchanged,
         "documents_failed": result.documents_failed,
+        "skipped_existing_urls": len(pre_skipped),
         "skipped_count": len(skipped),
         "errors": result.errors,
     }

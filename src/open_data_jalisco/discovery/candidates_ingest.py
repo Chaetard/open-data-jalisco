@@ -54,7 +54,9 @@ class CandidateIngestFilter:
     extension: str | None = None
     content_id: int | None = None
     content_title: str | None = None
-    limit: int = 10
+    # ``None`` means no cap (ingest every candidate that passes the other
+    # filters). A non-negative int caps the final entries list.
+    limit: int | None = 10
     allow_sensitive_content: bool = False
 
     def matches(self, candidate: dict[str, Any]) -> bool:
@@ -95,8 +97,8 @@ def select_entries(
 
     The function is offline (no network, no DB). Idempotent for a given input.
     """
-    if filter_spec.limit < 0:
-        raise CandidateIngestError("limit must be >= 0")
+    if filter_spec.limit is not None and filter_spec.limit < 0:
+        raise CandidateIngestError("limit must be >= 0 or None for no cap")
 
     entries: list[ScraperPlanEntry] = []
     skipped: list[dict[str, str]] = []
@@ -145,10 +147,38 @@ def select_entries(
 
         entries.append(_candidate_to_plan_entry(candidate))
 
-        if len(entries) >= filter_spec.limit:
+        if filter_spec.limit is not None and len(entries) >= filter_spec.limit:
             break
 
     return entries, skipped
+
+
+def filter_out_known_urls(
+    entries: list[ScraperPlanEntry], known_urls: set[str]
+) -> tuple[list[ScraperPlanEntry], list[dict[str, str]]]:
+    """Remove entries whose URL is already in ``known_urls``.
+
+    Returns ``(remaining, skipped)`` mirroring the shape of ``select_entries``,
+    so callers can merge ``skipped`` into their final report. The reason is
+    ``"already_in_db"`` so the operator can tell network skips apart from
+    dedup-by-URL skips.
+
+    This is the cheap pre-download filter: it lets ``discovered ingest`` skip
+    URLs we already have without re-fetching the bytes just to compute sha256
+    and discover they didn't change. The post-download dedup in
+    ``IngestSourceUseCase._process_one`` still runs (it catches the case where
+    the same URL serves different bytes than what we last stored).
+    """
+    if not known_urls:
+        return list(entries), []
+    remaining: list[ScraperPlanEntry] = []
+    skipped: list[dict[str, str]] = []
+    for entry in entries:
+        if entry.url in known_urls:
+            skipped.append({"url": entry.url, "reason": "already_in_db"})
+        else:
+            remaining.append(entry)
+    return remaining, skipped
 
 
 def _candidate_to_plan_entry(candidate: dict[str, Any]) -> ScraperPlanEntry:
