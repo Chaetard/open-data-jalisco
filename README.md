@@ -334,11 +334,52 @@ Toda la configuración runtime es via `.env` (gestionada por `pydantic-settings`
 | `DATABASE_URL` | `postgresql+psycopg://odj:odj@localhost:5432/open_data_jalisco` |
 | `RAW_STORAGE_PATH` | `./data/raw` |
 | `MANIFESTS_DIR` | `./datasets/manifests` |
-| `EMBEDDING_PROVIDER` | `dummy` (determinístico, sin API) |
+| `EMBEDDING_PROVIDER` | `dummy` (determinístico, sin API) — alternativa: `local_st` |
+| `EMBEDDING_MODEL` | `dummy-v1` — para `local_st`: `intfloat/multilingual-e5-small` |
 | `EMBEDDING_DIMENSION` | `384` |
+| `EMBEDDING_DEVICE` | `cpu` (sólo aplica a `local_st`; usa `cuda` si hay GPU disponible) |
 | `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` |
 
-`EMBEDDING_PROVIDER=dummy` produce vectores determinísticos desde el hash del texto — sin API keys, sin red. Providers reales se implementan detrás del puerto `EmbeddingProvider` en `src/open_data_jalisco/adapters/embeddings/`.
+`EMBEDDING_PROVIDER=dummy` produce vectores determinísticos desde el hash del texto — sin API keys, sin red, **sin semántica real**. Útil para tests, inútil para búsqueda. Para una demo funcional usa `local_st` (siguiente sección).
+
+## Demo local con embedder real
+
+El proveedor `local_st` ejecuta [`sentence-transformers`](https://www.sbert.net/) en CPU (o CUDA) sin red y sin API keys una vez bajado el modelo. El default `intfloat/multilingual-e5-small` es multilingüe, ~470 MB y de 384 dimensiones — coincide con el schema `vector(384)` de pgvector, así que **no hace falta migración**.
+
+```bash
+# 1) Instalar el extra (~700 MB con torch). Sólo la primera vez.
+uv sync --extra local-embed
+
+# 2) Editar .env
+#    EMBEDDING_PROVIDER=local_st
+#    EMBEDDING_MODEL=intfloat/multilingual-e5-small
+#    EMBEDDING_DIMENSION=384
+#    EMBEDDING_DEVICE=cpu
+
+# 3) Si ya habías procesado documentos con `dummy`, sus chunks quedaron con
+#    embeddings determinísticos inservibles. Borralos antes de re-indexar:
+uv run open-data-jalisco db reset-chunks      # (o: psql … "TRUNCATE chunks;")
+
+# 4) Ingestar 200 documentos de los candidatos ya descubiertos para Tala
+#    (el bloqueo de declaraciones patrimoniales cid=92 es automático)
+uv run open-data-jalisco discovered ingest \
+    datasets/discovered/tala/articulo_8_candidates_1_500.json \
+    --source tala --extension pdf --limit 200
+
+# 5) Procesar (extraer + chunkear + embeber). La primera corrida descarga
+#    el modelo a ~/.cache/huggingface y tarda más; las siguientes son rápidas.
+uv run open-data-jalisco process --limit 200
+
+# 6) Probar la búsqueda
+uv run open-data-jalisco search "contrato sapumu"
+uv run open-data-jalisco search "adjudicación directa 2025"
+uv run open-data-jalisco search "ley datos personales"
+
+# 7) Levantar la API para el frontend
+make api    # uvicorn apps.api.main:app --reload
+```
+
+El input al embedder antepone el título del documento a cada chunk — así, aunque el cuerpo de un PDF no mencione la entidad buscada (p. ej. "SAPUMU"), si aparece en el título el chunk hace match.
 
 ## Notas técnicas adicionales
 

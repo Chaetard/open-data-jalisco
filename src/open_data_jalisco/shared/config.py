@@ -38,6 +38,10 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Comma-separated list of allowed Origins for CORS. Vite default is
+    # http://localhost:5173, CRA default is http://localhost:3000. Override in
+    # .env for prod (e.g. CORS_ORIGINS="https://odj.example.com").
+    cors_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 
 
 _settings: Settings | None = None

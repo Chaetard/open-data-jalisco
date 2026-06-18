@@ -11,15 +11,13 @@ No incluye código de implementación: incluye contratos, ejemplos de request/re
 | Dato | Valor |
 |---|---|
 | Base URL local | `http://localhost:8000` |
-| Levantar API | `make api-run` (alias de `uvicorn open_data_jalisco.api.app:app --reload --host 0.0.0.0 --port 8000`) |
+| Levantar API | `make api` (alias de `uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .`) |
 | Docs interactivas | `GET /docs` (Swagger UI) y `GET /redoc` |
 | OpenAPI JSON | `GET /openapi.json` — útil para autogenerar tipos/clientes |
 | Content-Type | `application/json; charset=utf-8` (request y response salvo `/health`) |
 | Autenticación | Ninguna actualmente (no hay tokens, no hay cookies) |
-| CORS | No está configurado en `app.py`. Si el frontend corre en otro origen (`http://localhost:3000` típico), o agregas `CORSMiddleware` en `api/app.py`, o sirves desde el mismo origen mediante proxy de tu dev server. **Sin CORS, el browser bloqueará cualquier `fetch` cross-origin.** |
+| CORS | **Configurado y env-driven**. Por default acepta `http://localhost:5173` (Vite), `http://localhost:3000` (CRA/Next) y `http://127.0.0.1:5173`. Para prod o un puerto distinto, override `CORS_ORIGINS` en `.env` con una lista separada por comas (ej. `CORS_ORIGINS="https://odj.example.com,http://localhost:5173"`). |
 | Errores | FastAPI devuelve `{ "detail": "<mensaje>" }` con códigos HTTP estándar (404, 422, 500). 422 viene con un array de errores de validación. |
-
-> **Nota CORS**: si decides activarlo, lo más simple en desarrollo es agregar `CORSMiddleware` con `allow_origins=["http://localhost:3000"]` (o el puerto de tu dev server). Alternativa sin tocar backend: configurar el proxy de Vite/Next/CRA para reenviar `/api/*` al `:8000`.
 
 ---
 
@@ -573,7 +571,300 @@ Si en algún punto necesitas alguna de estas operaciones desde la UI, se agregan
 
 Para que el cliente HTTP no te sorprenda:
 
-- **CORS**: aún no está configurado. En cuanto el frontend salga de `localhost` o cambie de puerto, lo necesitas. Coordina con backend antes de desplegar.
 - **Paginación con total**: el backend no devuelve `total` hoy. Si lo necesitas para mostrar "página 3 de 17", solicita agregar `X-Total-Count` o un wrapper `{ items, total, limit, offset }`.
 - **Autenticación**: no existe. Si se agrega, será probablemente `Authorization: Bearer <jwt>` — diseña tu cliente con un slot para inyectar ese header desde el inicio.
-- **Embedding provider**: el campo `embedding_provider` en `/search` te dice si estás en `"dummy"` (local) o algo real. El frontend puede mostrar un banner "Búsqueda en modo demo" cuando sea `"dummy"`.
+- **Embedding provider**: el campo `embedding_provider` en `/search` te dice si estás en `"dummy"` (local), `"local_st"` (sentence-transformers) o algo real. El frontend puede mostrar un banner "Búsqueda en modo demo" cuando sea `"dummy"`.
+
+---
+
+## 10. Receta concreta para React + Vite
+
+Esta sección NO reemplaza las anteriores — es el "kit de arranque" para el caso que más usamos en dev.
+
+### 10.1 Arrancar todo en orden
+
+En dos terminales separadas:
+
+```bash
+# Terminal 1 — API (puerto 8000). El --reload se reinicia solo al guardar.
+make api
+# equivalente literal:
+# uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .
+
+# Terminal 2 — frontend Vite (puerto 5173 por default)
+cd <tu-carpeta-de-front>
+npm run dev
+```
+
+Verificá que la API responde antes de pelearte con el front:
+
+```bash
+curl http://localhost:8000/health
+# → {"status":"ok","version":"0.1.0","environment":"local"}
+```
+
+### 10.2 Variable de entorno en Vite
+
+En la raíz del front, `.env.development`:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+Para producción, `.env.production`:
+
+```bash
+VITE_API_BASE_URL=https://api.odj.example.com
+```
+
+Vite expone `import.meta.env.VITE_API_BASE_URL` (sólo las que empiezan con `VITE_`).
+
+### 10.3 Tipos TypeScript del API
+
+Pegá esto en `src/api/types.ts` — son los Pydantic schemas reales del backend (`api/schemas.py`):
+
+```ts
+export type ProcessingStatus =
+  | "pending" | "extracted" | "chunked" | "indexed" | "failed" | "needs_ocr";
+
+export type DocumentType =
+  | "contract" | "bidding" | "award" | "regulation" | "minutes"
+  | "budget" | "financial_report" | "other" | "unknown";
+
+export interface SourceOut {
+  id: string;
+  slug: string;
+  name: string;
+  kind: string;
+  municipality: string;
+  official_url: string;
+  description: string | null;
+  is_active: boolean;
+}
+
+export interface DocumentOut {
+  id: string;
+  source_id: string;
+  sha256: string;
+  title: string | null;
+  document_type: DocumentType;
+  municipality: string;
+  year: number | null;
+  official_url: string;
+  captured_url: string | null;
+  captured_at: string;           // ISO-8601 UTC
+  mime_type: string;
+  storage_path: string;
+  file_size: number;
+  processing_status: ProcessingStatus;
+  needs_ocr: boolean;
+  version: number;
+  is_current: boolean;
+  superseded_by: string | null;
+}
+
+export interface ChunkOut {
+  id: string;
+  document_id: string;
+  source_id: string;
+  sha256: string;
+  chunk_index: number;
+  text: string;
+  char_count: number;
+  page_start: number | null;
+  page_end: number | null;
+  section_title: string | null;
+  document_type: DocumentType;
+  municipality: string;
+  year: number | null;
+}
+
+export interface SearchHit {
+  score: number;                 // 0–1, mayor = mejor
+  chunk: ChunkOut;
+  document: DocumentOut;
+}
+
+export interface SearchResponse {
+  query: string;
+  embedding_provider: string;    // "dummy" | "local_st" | ...
+  embedding_model: string;
+  embedding_dimension: number;
+  hits: SearchHit[];
+}
+
+export interface SearchRequest {
+  q: string;
+  limit?: number;                // 1–50, default 10
+  municipality?: string | null;
+  document_type?: DocumentType | null;
+  source_id?: string | null;     // UUID
+}
+
+export interface ApiError {
+  status: number;
+  message: string;
+  fieldErrors?: Array<{ loc: string[]; msg: string }>;
+}
+```
+
+### 10.4 Cliente HTTP mínimo (sin dependencias extras)
+
+`src/api/client.ts`:
+
+```ts
+import type {
+  ApiError, DocumentOut, SearchRequest, SearchResponse, SourceOut,
+} from "./types";
+
+const BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    const err: ApiError = {
+      status: res.status,
+      message: typeof body.detail === "string" ? body.detail : "Validation error",
+      fieldErrors: Array.isArray(body.detail) ? body.detail : undefined,
+    };
+    throw err;
+  }
+  return res.json();
+}
+
+export const api = {
+  health: () => request<{ status: string; version: string }>("/health"),
+
+  listSources: (includeInactive = false) =>
+    request<SourceOut[]>(
+      `/sources${includeInactive ? "?include_inactive=true" : ""}`,
+    ),
+
+  listDocuments: (params: {
+    limit?: number; offset?: number; municipality?: string; year?: number;
+  } = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) q.set(k, String(v));
+    }
+    return request<DocumentOut[]>(`/documents?${q.toString()}`);
+  },
+
+  search: (body: SearchRequest) =>
+    request<SearchResponse>("/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+```
+
+### 10.5 Hook de búsqueda con cancelación
+
+`src/hooks/useSearch.ts`:
+
+```ts
+import { useEffect, useState } from "react";
+import { api } from "../api/client";
+import type { ApiError, SearchResponse } from "../api/types";
+
+export function useSearch(query: string, limit = 10) {
+  const [data, setData] = useState<SearchResponse | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setData(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const t = setTimeout(() => {
+      api.search({ q, limit })
+        .then((r) => { if (!cancelled) setData(r); })
+        .catch((e) => { if (!cancelled) setError(e); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    }, 300); // debounce 300ms
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, limit]);
+
+  return { data, error, loading };
+}
+```
+
+### 10.6 Componente de resultados
+
+`src/components/SearchResults.tsx`:
+
+```tsx
+import type { SearchHit } from "../api/types";
+
+export function SearchResults({ hits }: { hits: SearchHit[] }) {
+  if (hits.length === 0) {
+    return <p>Sin resultados. Probá otra consulta.</p>;
+  }
+  return (
+    <ul className="search-results">
+      {hits.map((hit) => (
+        <li key={hit.chunk.id}>
+          <header>
+            <strong>{hit.document.title ?? "(sin título)"}</strong>
+            <span> · score {hit.score.toFixed(3)}</span>
+            {hit.chunk.page_start != null && (
+              <span> · pág. {hit.chunk.page_start}
+                {hit.chunk.page_end !== hit.chunk.page_start && `–${hit.chunk.page_end}`}
+              </span>
+            )}
+          </header>
+          <p>{hit.chunk.text.slice(0, 280)}{hit.chunk.text.length > 280 ? "…" : ""}</p>
+          <a href={hit.document.official_url} target="_blank" rel="noopener noreferrer">
+            Abrir PDF original ↗
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### 10.7 Si tu front sigue rompiendo con CORS
+
+Si después de levantar la API con CORS configurado seguís viendo error en el browser, chequeá en orden:
+
+1. **El origin del front es el que el backend espera.** Abrí DevTools → Network → la request bloqueada → mirá el header `Origin` que envía el browser. Tiene que estar en `CORS_ORIGINS` del backend. Vite a veces arranca en `:5174` si `:5173` está ocupado.
+2. **El backend NO se reinició** después de cambiar `.env`. `--reload` sólo escucha cambios en `.py`, no en `.env`. Mata el proceso y volvé a correr `make api`.
+3. **Estás haciendo `fetch` a `0.0.0.0:8000`** (no, el browser no acepta eso). Usá `localhost:8000` o `127.0.0.1:8000`.
+4. **Alternativa sin tocar nada**: el proxy de Vite. En `vite.config.ts`:
+   ```ts
+   server: {
+     proxy: {
+       "/api": { target: "http://localhost:8000", changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, "") },
+     },
+   },
+   ```
+   Y tu front llama a `/api/search` sin cross-origin. Útil si tenés un proxy en prod y querés mismo shape en dev.
+
+### 10.8 Debug del lado del backend
+
+Si la API parece "responder vacío" pero hay docs en la DB:
+
+```bash
+# 1) Verificar que SÍ hay indexed
+uv run open-data-jalisco db stats
+
+# 2) Probar el endpoint directo (sin browser, sin CORS)
+curl -s -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"q":"comité de transparencia tala","limit":3}' | jq .
+
+# 3) Si la API responde con hits pero el front muestra vacío, es bug del front.
+#    Si la API también devuelve `hits: []`, mirá embedding_provider — si dice
+#    "dummy" tu .env apunta al provider tonto y por eso no encuentra nada.
+```
