@@ -42,6 +42,12 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+# Embedder local vía sentence-transformers (~700 MB con torch). Opcional para
+# no obligar a CI ni a contribuidores que sólo trabajan en scrapers/API.
+# Instalar con: `uv sync --extra local-embed`.
+local-embed = [
+    "sentence-transformers>=3.0",
+]
 
 [project.scripts]
 open-data-jalisco = "open_data_jalisco.cli:app"

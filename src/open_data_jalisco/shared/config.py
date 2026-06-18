@@ -22,9 +22,10 @@ class Settings(BaseSettings):
     raw_storage_path: Path = Path("./data/raw")
     manifests_dir: Path = Path("./datasets/manifests")
 
-    embedding_provider: Literal["dummy"] = "dummy"
+    embedding_provider: Literal["dummy", "local_st"] = "dummy"
     embedding_model: str = "dummy-v1"
     embedding_dimension: int = 384
+    embedding_device: str = "cpu"
 
     scraper_user_agent: str = "open-data-jalisco/0.1"
     scraper_timeout_seconds: int = 30

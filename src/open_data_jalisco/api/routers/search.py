@@ -31,7 +31,7 @@ def _run_semantic_search(
     doc_repo: DocumentRepository,
     embedder: EmbeddingProvider,
 ) -> SearchResponse:
-    [vector] = embedder.embed([q])
+    vector = embedder.embed_query(q)
     matches = chunk_repo.semantic_search(
         vector,
         limit=limit,

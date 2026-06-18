@@ -20,6 +20,9 @@ class FakeEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
+    def embed_query(self, text: str) -> list[float]:
+        return [0.1, 0.2, 0.3, 0.4]
+
 
 class FakeChunkRepo:
     def __init__(self, chunks: list[Chunk]):

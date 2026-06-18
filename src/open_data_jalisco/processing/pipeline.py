@@ -105,7 +105,8 @@ class ProcessDocumentsUseCase:
             return
 
         self._chunk_repo.delete_for_document(doc.id)
-        vectors = self._embedder.embed([c.text for c in candidates])
+        embed_inputs = [_compose_embedding_input(doc, c) for c in candidates]
+        vectors = self._embedder.embed(embed_inputs)
         chunks = [
             Chunk(
                 document_id=doc.id,
@@ -138,3 +139,21 @@ def _derive_extension(storage_path: str) -> str:
     if "." in storage_path:
         return storage_path.rsplit(".", 1)[-1].lower()
     return ""
+
+
+def _compose_embedding_input(doc: Document, candidate) -> str:
+    """Build the text that goes into the embedder for a chunk.
+
+    Why: a chunk's body may not mention the entity the user is searching for
+    (e.g. the contracting company name lives in the document title but not in
+    every page of the body). Prepending the document title — and the chunk's
+    section heading if available — gives every chunk a chance to match those
+    queries without changing the text persisted to the database.
+    """
+    parts: list[str] = []
+    if doc.title:
+        parts.append(doc.title.strip())
+    if candidate.section_title:
+        parts.append(candidate.section_title.strip())
+    parts.append(candidate.text)
+    return "\n\n".join(parts)

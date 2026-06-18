@@ -34,6 +34,9 @@ class DummyEmbeddingProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(t) for t in texts]
 
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed_one(text)
+
     def _embed_one(self, text: str) -> list[float]:
         seed = text.encode("utf-8")
         raw = bytearray()
