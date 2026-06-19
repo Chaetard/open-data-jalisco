@@ -15,10 +15,11 @@ selection/projection layer:
   from a candidates JSON file.
 
 It also encodes a small explicit allow-list / deny-list for *sensitive
-content categories*. As of now, SAPUMU ``content_id=92`` carries
-"declaraciones patrimoniales" (personal financial disclosures from public
-servants). We don't ingest those by default — callers must pass
-``allow_sensitive_content=True`` to override.
+content categories*. SAPUMU ``content_id`` is a global sequence shared across
+every municipality on the platform (Tala, Tequila, ...), so a given id names
+the same content category everywhere. We don't ingest known-sensitive
+categories by default — callers must pass ``allow_sensitive_content=True``
+to override.
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ from ..ports.scraper import ScraperPlanEntry
 SENSITIVE_CONTENT_IDS: frozenset[int] = frozenset(
     {
         92,  # declaraciones patrimoniales de servidores públicos
+        267,  # declaraciones patrimoniales de servidores públicos (segunda página)
+        449,  # curricula de funcionarios (CVs — datos personales)
     }
 )
 
