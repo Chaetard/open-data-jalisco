@@ -14,11 +14,20 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 
+class LLMError(RuntimeError):
+    """Upstream LLM call failed (bad request, quota, network, timeout).
+
+    Carries the provider's own message so callers can surface the real reason
+    instead of a blank 500.
+    """
+
+
 @dataclass
 class ToolCall:
     id: str
     name: str
     arguments: str  # raw JSON string as emitted by the model
+    extra_content: dict[str, Any] | None = None  # provider-specific tool-call metadata
 
 
 @dataclass

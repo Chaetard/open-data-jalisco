@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...agent import AskAgent
+from ...ports.llm import LLMError
 from ..deps import get_ask_agent
 
 router = APIRouter(tags=["agent"])
@@ -38,14 +39,19 @@ class AskResponse(BaseModel):
 @router.post("/ask", response_model=AskResponse)
 def ask(
     body: AskRequest,
-    agent: AskAgent | None = Depends(get_ask_agent),
+    agent: AskAgent | None = Depends(get_ask_agent),  # noqa: B008
 ) -> AskResponse:
     if agent is None:
         raise HTTPException(
             status_code=503,
             detail="Agent not configured. Set LLM_API_KEY (and optionally LLM_MODEL).",
         )
-    result = agent.ask(body.question)
+    try:
+        result = agent.ask(body.question)
+    except LLMError as e:
+        # Upstream model failed - return its reason as a clean 502 instead of a
+        # 500 ASGI traceback.
+        raise HTTPException(status_code=502, detail=f"Upstream LLM error: {e}") from e
     return AskResponse(
         answer=result.answer,
         model=result.model,

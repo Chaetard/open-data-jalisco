@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from ...ports.llm import ChatMessage, ChatResult, ToolCall
+from ...ports.llm import ChatMessage, ChatResult, LLMError, ToolCall
 
 
 class OpenAICompatClient:
@@ -49,33 +49,45 @@ class OpenAICompatClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        resp = httpx.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self._timeout,
-        )
-        resp.raise_for_status()
+        try:
+            resp = httpx.post(
+                f"{self._base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self._timeout,
+            )
+        except httpx.RequestError as e:
+            raise LLMError(f"LLM request failed: {e}") from e
+        if resp.status_code >= 400:
+            # Surface the provider's own message. raise_for_status() would hide
+            # the body, but that body is exactly where Gemini/OpenAI explain the
+            # real reason (bad field, quota, model name, ...).
+            raise LLMError(f"LLM upstream {resp.status_code}: {resp.text[:1000]}")
         message = resp.json()["choices"][0]["message"]
         return _parse_message(message)
 
 
 def _message_to_wire(m: ChatMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": m.role}
-    # OpenAI requires "content" present even when null for assistant tool calls.
-    out["content"] = m.content
+    # Gemini's OpenAI-compat layer rejects content: null on an assistant turn
+    # that carries tool_calls (OpenAI tolerates it) - a 400 that only fires when
+    # the model calls the tool without any preamble text. Omit content when None.
+    if m.content is not None:
+        out["content"] = m.content
     if m.tool_calls:
-        out["tool_calls"] = [
-            {
+        out["tool_calls"] = []
+        for tc in m.tool_calls:
+            call = {
                 "id": tc.id,
                 "type": "function",
                 "function": {"name": tc.name, "arguments": tc.arguments},
             }
-            for tc in m.tool_calls
-        ]
+            if tc.extra_content is not None:
+                call["extra_content"] = tc.extra_content
+            out["tool_calls"].append(call)
     if m.tool_call_id is not None:
         out["tool_call_id"] = m.tool_call_id
     if m.name is not None:
@@ -90,6 +102,7 @@ def _parse_message(message: dict[str, Any]) -> ChatResult:
             id=c.get("id", ""),
             name=c["function"]["name"],
             arguments=c["function"].get("arguments", "") or "",
+            extra_content=c.get("extra_content"),
         )
         for c in raw_calls
         if c.get("type", "function") == "function"

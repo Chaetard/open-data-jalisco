@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from open_data_jalisco.agent import AskResult, Source
 from open_data_jalisco.api.app import create_app
 from open_data_jalisco.api.deps import get_ask_agent
+from open_data_jalisco.ports.llm import LLMError
 
 
 def test_ask_returns_503_when_agent_disabled():
@@ -53,3 +54,16 @@ def test_ask_rejects_short_question():
     app.dependency_overrides[get_ask_agent] = lambda: _FakeAgent()
     res = TestClient(app).post("/ask", json={"question": "a"})
     assert res.status_code == 422
+
+
+class _BoomAgent:
+    def ask(self, question: str) -> AskResult:
+        raise LLMError("LLM upstream 400: invalid value at messages[2].content")
+
+
+def test_ask_returns_502_on_upstream_llm_error():
+    app = create_app()
+    app.dependency_overrides[get_ask_agent] = lambda: _BoomAgent()
+    res = TestClient(app).post("/ask", json={"question": "¿qué requisitos?"})
+    assert res.status_code == 502
+    assert "LLM" in res.json()["detail"]
