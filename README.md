@@ -167,6 +167,7 @@ El proyecto podrá aceptar donaciones voluntarias para cubrir costos técnicos (
 | Documento | Contenido |
 |---|---|
 | 📜 [docs/MANIFEST.md](docs/MANIFEST.md) | Manifiesto completo: propósito, principios, gobernanza, alcance, IA, contribuciones, sostenibilidad. |
+| 🔌 [docs/API.md](docs/API.md) | Referencia completa de la API pública: cada endpoint, parámetros, esquemas, errores y ejemplos curl. |
 | 🖥️ [docs/FRONTEND_GUIDE.md](docs/FRONTEND_GUIDE.md) | Guía de integración frontend: endpoints, ejemplos JSON, flujos de prueba. |
 | 🧪 `--help` en CLI | Cada comando documenta sus opciones: `uv run open-data-jalisco --help`, `... sapumu --help`, `... discovered --help`. |
 
@@ -278,7 +279,7 @@ Endpoints expuestos:
 | POST | `/semantic-search` | Alias explícito de POST /search |
 | GET | `/manifests` | Lista manifests en disco |
 
-Documentación interactiva en `GET /docs` (Swagger) y `GET /redoc`. Detalle de cada endpoint con ejemplos JSON: [**docs/FRONTEND_GUIDE.md**](docs/FRONTEND_GUIDE.md).
+Documentación interactiva en `GET /docs` (Swagger) y `GET /redoc`. Referencia completa de cada endpoint (parámetros, esquemas, errores, ejemplos curl): [**docs/API.md**](docs/API.md). Integración frontend: [**docs/FRONTEND_GUIDE.md**](docs/FRONTEND_GUIDE.md).
 
 ## CLI — flujos principales
 
