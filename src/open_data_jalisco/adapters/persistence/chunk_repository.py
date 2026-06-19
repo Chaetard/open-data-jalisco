@@ -58,6 +58,7 @@ class PostgresChunkRepository:
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         fetch_n = max(limit * _OVERFETCH_FACTOR, _OVERFETCH_MIN)
         with self._sf() as session:
@@ -69,6 +70,8 @@ class PostgresChunkRepository:
                 stmt = stmt.where(ChunkORM.document_type == document_type)
             if source_id is not None:
                 stmt = stmt.where(ChunkORM.source_id == source_id)
+            if year is not None:
+                stmt = stmt.where(ChunkORM.year == year)
             stmt = stmt.order_by(distance.asc()).limit(fetch_n)
             ranked = (
                 (chunk_to_domain(row[0]), float(row[1]))
@@ -84,6 +87,7 @@ class PostgresChunkRepository:
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         """Full-text (BM25-ish) search over chunk text.
 
@@ -108,6 +112,8 @@ class PostgresChunkRepository:
                 stmt = stmt.where(ChunkORM.document_type == document_type)
             if source_id is not None:
                 stmt = stmt.where(ChunkORM.source_id == source_id)
+            if year is not None:
+                stmt = stmt.where(ChunkORM.year == year)
             stmt = stmt.order_by(rank.desc()).limit(fetch_n)
             ranked = (
                 (chunk_to_domain(row[0]), float(row[1]))

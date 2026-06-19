@@ -149,6 +149,22 @@ def test_sources_track_documents_cited_in_the_answer():
     assert "https://x.invalid/comur" not in urls  # consulted but never cited
 
 
+def test_mode_selects_system_prompt():
+    # The chosen mode must reach the system message and be echoed on the result.
+    for mode, marker in (("ciudadano", "modo ciudadano"), ("investigador", "modo investigador")):
+        llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
+        result = AskAgent(llm=llm, search=RecordingSearch([]), max_iters=3).ask("x", mode=mode)
+        system_prompt = llm.calls[0][0][0].content
+        assert marker in system_prompt
+        assert result.mode == mode
+
+
+def test_unknown_mode_falls_back_to_default():
+    llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
+    result = AskAgent(llm=llm, search=RecordingSearch([]), max_iters=3).ask("x", mode="bogus")
+    assert result.mode == "ciudadano"
+
+
 def test_agent_caps_and_ranks_sources():
     # One search returns 8 distinct docs; only the 5 highest-scoring survive,
     # ordered by score. Stops the agent from dumping every chunk it ever saw.

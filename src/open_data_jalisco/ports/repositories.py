@@ -64,6 +64,7 @@ class ChunkRepository(Protocol):
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         ...
 
@@ -75,6 +76,7 @@ class ChunkRepository(Protocol):
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         """Full-text search over chunk text. Float is ts_rank (higher better)."""
         ...

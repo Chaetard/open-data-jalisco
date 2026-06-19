@@ -78,6 +78,7 @@ def run_semantic_search(
     doc_repo: DocumentRepository,
     embedder: EmbeddingProvider,
     reranker: Reranker | None,
+    year: int | None = None,
 ) -> SearchResponse:
     start = time.perf_counter()
     # Stage markers logged BEFORE each potentially-slow step (embed model, DB
@@ -98,6 +99,7 @@ def run_semantic_search(
         municipality=municipality,
         document_type=document_type,
         source_id=source_id,
+        year=year,
     )
     lexical_matches = chunk_repo.lexical_search(
         q,
@@ -105,6 +107,7 @@ def run_semantic_search(
         municipality=municipality,
         document_type=document_type,
         source_id=source_id,
+        year=year,
     )
     matches = _fuse(vector_matches, lexical_matches, limit=pool)
     logger.info(

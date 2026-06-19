@@ -45,6 +45,7 @@ class FakeChunkRepo:
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         return [(c, 0.1) for c in self._chunks[:limit]]
 
@@ -56,6 +57,7 @@ class FakeChunkRepo:
         municipality: str | None = None,
         document_type: str | None = None,
         source_id: UUID | None = None,
+        year: int | None = None,
     ) -> list[tuple[Chunk, float]]:
         # Naive substring match stands in for Postgres FTS so hybrid search is
         # exercisable without a DB.

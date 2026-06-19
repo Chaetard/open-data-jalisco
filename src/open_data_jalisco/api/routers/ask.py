@@ -7,6 +7,8 @@ POST a question; the agent searches the municipal documents (possibly several
 times), reasons, and replies with a grounded answer plus the documents it used.
 Disabled (503) unless ``LLM_API_KEY`` is set — the rest of the API is unaffected.
 """
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -19,6 +21,9 @@ router = APIRouter(tags=["agent"])
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, description="Natural-language question")
+    # Answer style. `ciudadano` (default): plain language, action-oriented.
+    # `investigador`: full technical traceability (rows/columns, partidas).
+    mode: Literal["ciudadano", "investigador"] = "ciudadano"
 
 
 class AskSource(BaseModel):
@@ -37,6 +42,9 @@ class AskSource(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     model: str
+    # Which answer style produced this (echoes the request; lets the UI badge it
+    # and offer a "ver versión técnica" toggle).
+    mode: str
     iterations: int
     sources: list[AskSource]
 
@@ -52,7 +60,7 @@ def ask(
             detail="Agent not configured. Set LLM_API_KEY (and optionally LLM_MODEL).",
         )
     try:
-        result = agent.ask(body.question)
+        result = agent.ask(body.question, mode=body.mode)
     except LLMError as e:
         # Upstream model failed - return its reason as a clean 502 instead of a
         # 500 ASGI traceback.
@@ -60,6 +68,7 @@ def ask(
     return AskResponse(
         answer=result.answer,
         model=result.model,
+        mode=result.mode,
         iterations=result.iterations,
         sources=[
             AskSource(

@@ -93,6 +93,8 @@ class SearchRequest(BaseModel):
     municipality: str | None = None
     document_type: str | None = None
     source_id: UUID | None = None
+    # Filter by document year (the /YYYY/ the source assigns). null = all years.
+    year: int | None = Field(default=None, ge=1900, le=2100)
     # Hide republished state/federal reference material, keeping municipal-own
     # (and unmarked) documents. Defaults true: this is a municipal product, and
     # the state budget volumes / federal laws the portal mirrors are noise for

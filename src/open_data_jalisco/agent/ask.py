@@ -28,10 +28,12 @@ logger = get_logger(__name__)
 # from the DB/embedder wiring and is trivial to fake in tests.
 SearchFn = Callable[[str, bool, int], list[SearchHit]]
 
-_SYSTEM_PROMPT = (
+_CORE_RULES = (
     "Eres un asistente de transparencia que responde sobre los documentos "
-    "públicos del municipio de Tala, Jalisco. Tu trabajo es reportar lo que los "
-    "documentos dicen, no juzgar a la autoridad. Reglas:\n"
+    "públicos de municipios de Jalisco (actualmente Tala y Tequila). Tu trabajo "
+    "es reportar lo que los documentos dicen, no juzgar a la autoridad. Cuando la "
+    "pregunta no nombre un municipio, no asumas uno: si los documentos recuperados "
+    "son de varios, distingue de cuál es cada hallazgo. Reglas:\n"
     "\n"
     "FUENTE\n"
     "- Responde SÓLO con lo obtenido vía la herramienta search_documents. No uses "
@@ -84,13 +86,41 @@ _SYSTEM_PROMPT = (
     "certeza MEDIA de que eso represente la obra completa, el contrato total o el "
     "proveedor final — eso exige contrato/factura/estimación. No declares 'certeza "
     "alta' sobre el hecho completo con sólo evidencia contable o presupuestal.\n"
+)
+
+# El bloque RESPUESTA cambia según el modo; todo lo de arriba (grounding,
+# exactitud, vigencia, certeza) es idéntico, para que ningún modo sacrifique
+# correctitud — sólo cambia la presentación.
+_RESPUESTA_TECNICO = (
     "\n"
-    "RESPUESTA\n"
+    "RESPUESTA (modo investigador)\n"
     "- Cita por su título los documentos que realmente usaste (todos los que "
     "sustenten un hallazgo), no los que sólo hojeaste. Cada hallazgo debe poder "
     "rastrearse a un documento citado.\n"
     "- Español claro y conciso. Si no encuentras evidencia, dilo; no rellenes."
 )
+
+_RESPUESTA_CIUDADANO = (
+    "\n"
+    "RESPUESTA (modo ciudadano)\n"
+    "- Escribe para una persona sin formación técnica: lenguaje sencillo, sin "
+    "jerga contable ni tablas (no digas 'partida 333'; di 'el rubro de…').\n"
+    "- Si la pregunta es sobre un trámite o servicio, estructura la respuesta así: "
+    "QUÉ necesitas, DÓNDE se hace (dependencia), QUÉ llevar (requisitos), CUÁNTO "
+    "cuesta y QUÉ FALTA CONFIRMAR en ventanilla oficial.\n"
+    "- Da la respuesta directa primero; el detalle, después y breve.\n"
+    "- Aun en lenguaje simple, respeta TODAS las reglas de arriba: sólo lo que "
+    "digan los documentos, cita por su título los que usaste, y marca lo que no "
+    "aparezca en ellos como 'conviene confirmar oficialmente'. No inventes."
+)
+
+# Default ciudadano: la beta está orientada al público. El modo investigador es
+# opt-in (clientes que quieren la traza técnica completa).
+_SYSTEM_PROMPTS = {
+    "ciudadano": _CORE_RULES + _RESPUESTA_CIUDADANO,
+    "investigador": _CORE_RULES + _RESPUESTA_TECNICO,
+}
+DEFAULT_MODE = "ciudadano"
 
 _SEARCH_TOOL: dict[str, Any] = {
     "type": "function",
@@ -98,7 +128,8 @@ _SEARCH_TOOL: dict[str, Any] = {
         "name": "search_documents",
         "description": (
             "Búsqueda híbrida (significado + texto exacto) en los documentos "
-            "públicos del municipio de Tala. Encuentra tanto conceptos como "
+            "públicos de los municipios de Jalisco (Tala, Tequila). Encuentra "
+            "tanto conceptos como "
             "términos literales: códigos de partida (333, 3300), fondos "
             "(FAISMUN), montos, RFC, nombres propios y artículos. Devuelve "
             "fragmentos con su documento, página y URL. Llámala varias veces con "
@@ -144,7 +175,7 @@ _STOPWORDS = frozenset(
     {
         "de", "la", "el", "los", "las", "del", "y", "en", "por", "para", "con",
         "un", "una", "al", "lo", "su", "sus", "o", "e", "municipio", "tala",
-        "jalisco", "documento", "documentos",
+        "tequila", "jalisco", "documento", "documentos",
     }
 )
 
@@ -170,6 +201,9 @@ class AskResult:
     sources: list[Source] = field(default_factory=list)
     iterations: int = 0
     model: str = ""
+    # Which answer style produced this (ciudadano | investigador). Echoed so the
+    # UI can label the response and offer a "ver versión técnica" toggle.
+    mode: str = DEFAULT_MODE
 
 
 class AskAgent:
@@ -178,9 +212,10 @@ class AskAgent:
         self._search = search
         self._max_iters = max_iters
 
-    def ask(self, question: str) -> AskResult:
+    def ask(self, question: str, *, mode: str = DEFAULT_MODE) -> AskResult:
+        mode = mode if mode in _SYSTEM_PROMPTS else DEFAULT_MODE
         messages = [
-            ChatMessage(role="system", content=_SYSTEM_PROMPT),
+            ChatMessage(role="system", content=_SYSTEM_PROMPTS[mode]),
             ChatMessage(role="user", content=question),
         ]
         # url -> (best score seen, Source). Dedupes across searches and lets us
@@ -207,6 +242,7 @@ class AskAgent:
                     sources=selected,
                     iterations=i + 1,
                     model=self._llm.model,
+                    mode=mode,
                 )
 
             messages.append(
@@ -246,6 +282,7 @@ class AskAgent:
             sources=_select_sources(answer, sources),
             iterations=self._max_iters,
             model=self._llm.model,
+            mode=mode,
         )
 
     def _run_tool(self, name: str, arguments: str) -> list[SearchHit]:
