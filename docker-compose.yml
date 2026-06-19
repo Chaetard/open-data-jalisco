@@ -38,6 +38,12 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-odj}:${POSTGRES_PASSWORD:-odj}@postgres:5432/${POSTGRES_DB:-open_data_jalisco}
       # Caddy expone la API bajo /api -> las docs (/api/docs) cargan bien el spec.
       ROOT_PATH: /api
+      # Cache de modelos HuggingFace (embedder e5, reranker) en ./data del host,
+      # así no se re-descargan (~500 MB) en cada `up`/recreate y no engordan el vhdx.
+      HF_HOME: /app/data/hf_cache
+      # El backend "xet" de HF se cuelga a través de Docker/WSL2 (deja blobs
+      # .incomplete). Forzamos la descarga HTTP clásica, que es estable aquí.
+      HF_HUB_DISABLE_XET: "1"
     depends_on:
       postgres:
         condition: service_healthy

@@ -42,11 +42,12 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
-# Embedder local vía sentence-transformers (~700 MB con torch). Opcional para
-# no obligar a CI ni a contribuidores que sólo trabajan en scrapers/API.
+# Embedder local vía sentence-transformers. Opcional para no obligar a CI ni
+# a contribuidores que sólo trabajan en scrapers/API.
 # Instalar con: `uv sync --extra local-embed`.
 local-embed = [
     "sentence-transformers>=3.0",
+    "torch>=2.0",
 ]
 
 [project.scripts]
@@ -61,6 +62,17 @@ Issues = "https://github.com/Chaetard/open-data-jalisco/issues"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# torch's default PyPI wheel bundles the full CUDA stack (~2.5 GB of
+# nvidia-* packages) even though we only ever run it on CPU here. Force the
+# CPU-only wheel index so `local-embed` stays a few hundred MB, not gigabytes.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/open_data_jalisco"]
