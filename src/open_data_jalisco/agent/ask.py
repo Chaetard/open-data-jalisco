@@ -215,8 +215,12 @@ class AskAgent:
         if not query:
             return []
         local_only = bool(args.get("local_only", True))
+        # Log before the call, not just after: if search hangs (dead DB, slow
+        # rerank) the "returned" line never prints, so without this a hang here
+        # is invisible.
+        logger.info("ask: search q=%r local_only=%s", query, local_only)
         hits = self._search(query, local_only, _TOOL_HIT_LIMIT)
-        logger.info("ask: search q=%r local_only=%s -> %d hits", query, local_only, len(hits))
+        logger.info("ask: search returned %d hits", len(hits))
         return hits
 
 

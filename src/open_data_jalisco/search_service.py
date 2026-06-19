@@ -52,12 +52,17 @@ def run_semantic_search(
     reranker: Reranker | None,
 ) -> SearchResponse:
     start = time.perf_counter()
+    # Stage markers logged BEFORE each potentially-slow step (embed model, DB
+    # query, rerank model). If one hangs, the log stops at that line and names
+    # the culprit; logging only the final summary would show nothing.
+    logger.info("search: start q=%r local_only=%s", q[:120], local_only)
     vector = embedder.embed_query(q)
 
     # Only over-fetch when a post-step needs the extra candidates; otherwise the
     # cheap path is byte-for-byte what it was before reranking existed.
     needs_pool = reranker is not None or local_only
     pool = max(limit, get_settings().rerank_pool) if needs_pool else limit
+    logger.info("search: db query (pool=%d)", pool)
     matches = chunk_repo.semantic_search(
         vector,
         limit=pool,
@@ -80,6 +85,7 @@ def run_semantic_search(
     rerank_scores: list[float] | None = None
     reranker_name: str | None = None
     if reranker is not None and enriched:
+        logger.info("search: reranking %d candidates", len(enriched))
         passages = [_rerank_passage(doc, chunk) for chunk, doc, _ in enriched]
         scores = reranker.rerank(q, passages)
         order = sorted(range(len(enriched)), key=lambda i: scores[i], reverse=True)

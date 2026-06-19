@@ -21,7 +21,15 @@ def get_engine() -> Engine:
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
+        _engine = create_engine(
+            settings.database_url,
+            future=True,
+            pool_pre_ping=True,
+            # Fail fast on a dead/unreachable DB instead of blocking the request
+            # (and the user's browser) on a TCP connect that never returns.
+            # ponytail: 10s constant; lift to a setting if prod needs tuning.
+            connect_args={"connect_timeout": 10},
+        )
     return _engine
 
 
