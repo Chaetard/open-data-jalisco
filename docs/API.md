@@ -504,7 +504,8 @@ curl -s -X POST http://localhost:8000/ask \
       "url": "https://…",
       "page_start": 12,
       "page_end": 12,
-      "jurisdiction": "municipal"
+      "jurisdiction": "municipal",
+      "excerpt": "Artículo 24. Para obtener la licencia de construcción el solicitante deberá presentar…"
     }
   ]
 }
@@ -641,6 +642,7 @@ Ver [`POST /search`](#post-search).
 | `page_start` | int \| null | Página del fragmento citado. |
 | `page_end` | int \| null | |
 | `jurisdiction` | string | `municipal`/`state`/`federal`/`unknown`. |
+| `excerpt` | string | Cita textual exacta en que se apoya la fuente (≤300 car.). El título sale del nombre de archivo y es poco confiable; **verifica contra el `excerpt`, no contra el título**. |
 
 ---
 

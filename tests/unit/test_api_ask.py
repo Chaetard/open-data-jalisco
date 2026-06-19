@@ -29,6 +29,7 @@ class _FakeAgent:
                     page_start=3,
                     page_end=3,
                     jurisdiction="municipal",
+                    excerpt="Artículo 5: los requisitos son A, B y C.",
                 )
             ],
             iterations=2,
@@ -47,6 +48,7 @@ def test_ask_returns_answer_and_sources():
     assert body["iterations"] == 2
     assert body["sources"][0]["title"] == "Reglamento municipal"
     assert body["sources"][0]["jurisdiction"] == "municipal"
+    assert body["sources"][0]["excerpt"].startswith("Artículo 5")
 
 
 def test_ask_rejects_short_question():

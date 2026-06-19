@@ -111,6 +111,8 @@ _SEARCH_TOOL: dict[str, Any] = {
 
 _TOOL_HIT_LIMIT = 6
 _SNIPPET_CHARS = 500
+# Length of the verifiable excerpt carried back to the UI per source.
+_EXCERPT_CHARS = 300
 # Cap the sources returned to the user. The agent may consult dozens of chunks
 # across several searches; surfacing all of them implies they were all used and
 # drowns the few that mattered. Keep the highest-scoring distinct documents.
@@ -125,6 +127,10 @@ class Source:
     page_start: int | None
     page_end: int | None
     jurisdiction: str
+    # The exact text the citation rests on. The filename-derived title is
+    # unreliable; the excerpt is the verifiable evidence, so the UI can show the
+    # quote and let the reader judge it regardless of the title.
+    excerpt: str
 
 
 @dataclass
@@ -239,7 +245,13 @@ def _to_source(hit: SearchHit) -> Source:
         page_start=hit.chunk.page_start,
         page_end=hit.chunk.page_end,
         jurisdiction=hit.document.jurisdiction,
+        excerpt=_excerpt(hit.chunk.text),
     )
+
+
+def _excerpt(text: str) -> str:
+    text = text.strip()
+    return text if len(text) <= _EXCERPT_CHARS else text[:_EXCERPT_CHARS].rstrip() + "…"
 
 
 def _format_hits(hits: list[SearchHit]) -> str:

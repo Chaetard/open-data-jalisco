@@ -27,6 +27,9 @@ class AskSource(BaseModel):
     page_start: int | None
     page_end: int | None
     jurisdiction: str
+    # Verifiable quote the citation rests on — trust the content, not the
+    # (filename-derived, unreliable) title.
+    excerpt: str
 
 
 class AskResponse(BaseModel):
@@ -63,6 +66,7 @@ def ask(
                 page_start=s.page_start,
                 page_end=s.page_end,
                 jurisdiction=s.jurisdiction,
+                excerpt=s.excerpt,
             )
             for s in result.sources
         ],
