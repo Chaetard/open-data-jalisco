@@ -10,11 +10,15 @@ whatever the deployer wants.
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
 
 from ...ports.llm import ChatMessage, ChatResult, LLMError, ToolCall
+from ...shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class OpenAICompatClient:
@@ -49,6 +53,14 @@ class OpenAICompatClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        logger.info(
+            "llm chat: model=%s msgs=%d tools=%s timeout=%ss",
+            self._model,
+            len(messages),
+            bool(tools),
+            self._timeout,
+        )
+        start = time.perf_counter()
         try:
             resp = httpx.post(
                 f"{self._base_url}/chat/completions",
@@ -60,12 +72,18 @@ class OpenAICompatClient:
                 timeout=self._timeout,
             )
         except httpx.RequestError as e:
+            logger.warning(
+                "llm chat failed (network) after %.1fs: %s", time.perf_counter() - start, e
+            )
             raise LLMError(f"LLM request failed: {e}") from e
+        elapsed = time.perf_counter() - start
         if resp.status_code >= 400:
             # Surface the provider's own message. raise_for_status() would hide
             # the body, but that body is exactly where Gemini/OpenAI explain the
             # real reason (bad field, quota, model name, ...).
+            logger.warning("llm chat -> %d in %.1fs: %s", resp.status_code, elapsed, resp.text[:300])
             raise LLMError(f"LLM upstream {resp.status_code}: {resp.text[:1000]}")
+        logger.info("llm chat -> %d in %.1fs", resp.status_code, elapsed)
         message = resp.json()["choices"][0]["message"]
         return _parse_message(message)
 

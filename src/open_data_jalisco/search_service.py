@@ -9,6 +9,7 @@ router depends on deps, deps builds the agent, the agent searches).
 """
 from __future__ import annotations
 
+import time
 from uuid import UUID
 
 from .api.schemas import (
@@ -24,6 +25,9 @@ from .ports.embedding_provider import EmbeddingProvider
 from .ports.repositories import ChunkRepository, DocumentRepository
 from .ports.reranker import Reranker
 from .shared.config import get_settings
+from .shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 _REFERENCE_LEVELS = (STATE, FEDERAL)
 
@@ -47,6 +51,7 @@ def run_semantic_search(
     embedder: EmbeddingProvider,
     reranker: Reranker | None,
 ) -> SearchResponse:
+    start = time.perf_counter()
     vector = embedder.embed_query(q)
 
     # Only over-fetch when a post-step needs the extra candidates; otherwise the
@@ -93,6 +98,16 @@ def run_semantic_search(
             )
         )
 
+    logger.info(
+        "search: q=%r local_only=%s pool=%d candidates=%d -> %d hits in %.0fms (rerank=%s)",
+        q[:120],
+        local_only,
+        pool,
+        len(enriched),
+        len(hits),
+        (time.perf_counter() - start) * 1000,
+        reranker_name,
+    )
     return SearchResponse(
         query=q,
         embedding_provider=embedder.name,

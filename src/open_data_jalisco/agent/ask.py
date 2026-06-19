@@ -12,12 +12,16 @@ except through the tool.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..api.schemas import SearchHit
 from ..ports.llm import ChatMessage, LLMClient
+from ..shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 # (query, local_only, limit) -> hits. Injected so the agent stays decoupled
 # from the DB/embedder wiring and is trivial to fake in tests.
@@ -142,10 +146,19 @@ class AskAgent:
         # url -> (best score seen, Source). Dedupes across searches and lets us
         # keep only the most relevant few at the end.
         sources: dict[str, tuple[float, Source]] = {}
+        start = time.perf_counter()
+        logger.info("ask: start q=%r max_iters=%d", question[:120], self._max_iters)
 
         for i in range(self._max_iters):
+            logger.info("ask: iter %d/%d -> llm", i + 1, self._max_iters)
             result = self._llm.chat(messages, tools=[_SEARCH_TOOL])
             if not result.tool_calls:
+                logger.info(
+                    "ask: answered after %d iters in %.1fs (%d sources)",
+                    i + 1,
+                    time.perf_counter() - start,
+                    len(sources),
+                )
                 return AskResult(
                     answer=result.content or "",
                     sources=_top_sources(sources),
@@ -178,6 +191,11 @@ class AskAgent:
 
         # Iterations exhausted: force a final answer with the evidence gathered,
         # no tools this time so the model must conclude.
+        logger.warning(
+            "ask: hit max_iters=%d in %.1fs, forcing final answer",
+            self._max_iters,
+            time.perf_counter() - start,
+        )
         final = self._llm.chat(messages, tools=None)
         return AskResult(
             answer=final.content or "No pude llegar a una respuesta con la evidencia encontrada.",
@@ -197,7 +215,9 @@ class AskAgent:
         if not query:
             return []
         local_only = bool(args.get("local_only", True))
-        return self._search(query, local_only, _TOOL_HIT_LIMIT)
+        hits = self._search(query, local_only, _TOOL_HIT_LIMIT)
+        logger.info("ask: search q=%r local_only=%s -> %d hits", query, local_only, len(hits))
+        return hits
 
 
 def _top_sources(sources: dict[str, tuple[float, Source]]) -> list[Source]:

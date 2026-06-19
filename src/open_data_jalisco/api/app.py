@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 open-data-jalisco contributors
 
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .. import __version__
@@ -84,6 +85,36 @@ def create_app() -> FastAPI:
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Content-Type", "Accept"],
         )
+
+    # Log every request's start and finish with duration. A request that hangs
+    # (slow upstream, runaway agent loop) leaves the "start" line with no
+    # "done" - exactly the signal that was missing when a query just timed out.
+    @app.middleware("http")
+    async def _log_requests(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        start = time.perf_counter()
+        logger.info("request start %s %s", request.method, request.url.path)
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "request error %s %s after %.0fms",
+                request.method,
+                request.url.path,
+                elapsed,
+            )
+            raise
+        elapsed = (time.perf_counter() - start) * 1000
+        logger.info(
+            "request done %s %s %d %.0fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed,
+        )
+        return response
 
     app.include_router(health.router)
     app.include_router(stats.router)
