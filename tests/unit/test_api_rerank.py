@@ -65,15 +65,17 @@ def test_documents_carry_jurisdiction_badge():
     assert by_title[MUNICIPAL_TITLE] == "municipal"
 
 
-def test_full_corpus_path_unchanged_when_no_reranker():
+def test_hybrid_fuses_lexical_above_misses_when_no_reranker():
+    # With no reranker the RRF fusion decides order. FEDERAL_TITLE's chunk text
+    # has no "presupuesto", so only the vector arm surfaces it; the two lexical
+    # matches (state + municipal budgets) fuse above it.
     client = _client(reranker=None)
     body = client.post("/search", json={"q": "presupuesto", "local_only": False}).json()
     assert body["reranker"] is None
-    assert [h["document"]["title"] for h in body["hits"]] == [
-        STATE_TITLE,
-        FEDERAL_TITLE,
-        MUNICIPAL_TITLE,
-    ]
+    titles = [h["document"]["title"] for h in body["hits"]]
+    assert set(titles) == {STATE_TITLE, FEDERAL_TITLE, MUNICIPAL_TITLE}
+    assert titles.index(STATE_TITLE) < titles.index(FEDERAL_TITLE)
+    assert titles.index(MUNICIPAL_TITLE) < titles.index(FEDERAL_TITLE)
     assert all(h["rerank_score"] is None for h in body["hits"])
 
 

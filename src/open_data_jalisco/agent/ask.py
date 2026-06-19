@@ -81,9 +81,12 @@ _SEARCH_TOOL: dict[str, Any] = {
     "function": {
         "name": "search_documents",
         "description": (
-            "Busca por significado (no por palabra exacta) en los documentos "
-            "públicos del municipio de Tala. Devuelve fragmentos con su documento, "
-            "página y URL. Llámala varias veces con consultas distintas si hace falta."
+            "Búsqueda híbrida (significado + texto exacto) en los documentos "
+            "públicos del municipio de Tala. Encuentra tanto conceptos como "
+            "términos literales: códigos de partida (333, 3300), fondos "
+            "(FAISMUN), montos, RFC, nombres propios y artículos. Devuelve "
+            "fragmentos con su documento, página y URL. Llámala varias veces con "
+            "consultas distintas si hace falta."
         ),
         "parameters": {
             "type": "object",

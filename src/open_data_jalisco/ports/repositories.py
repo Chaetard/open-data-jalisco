@@ -66,3 +66,15 @@ class ChunkRepository(Protocol):
         source_id: UUID | None = None,
     ) -> list[tuple[Chunk, float]]:
         ...
+
+    def lexical_search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        municipality: str | None = None,
+        document_type: str | None = None,
+        source_id: UUID | None = None,
+    ) -> list[tuple[Chunk, float]]:
+        """Full-text search over chunk text. Float is ts_rank (higher better)."""
+        ...

@@ -4,7 +4,7 @@
 from collections.abc import Callable, Iterable
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import ColumnElement, delete, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from ...domain.chunk import Chunk
@@ -70,6 +70,45 @@ class PostgresChunkRepository:
             if source_id is not None:
                 stmt = stmt.where(ChunkORM.source_id == source_id)
             stmt = stmt.order_by(distance.asc()).limit(fetch_n)
+            ranked = (
+                (chunk_to_domain(row[0]), float(row[1]))
+                for row in session.execute(stmt).all()
+            )
+            return dedupe_by_sha256(ranked, limit=limit)
+
+    def lexical_search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        municipality: str | None = None,
+        document_type: str | None = None,
+        source_id: UUID | None = None,
+    ) -> list[tuple[Chunk, float]]:
+        """Full-text (BM25-ish) search over chunk text.
+
+        Catches what embeddings miss: exact codes (333, 3300, FAISMUN), RFCs,
+        proper names, amounts — tokens the e5 model fragments into subwords. The
+        'spanish' config gives stemming + stopwords; numbers/acronyms pass
+        through as literal lexemes. Returned float is ts_rank (higher = better),
+        not a distance — the caller fuses it with the vector arm by rank, not by
+        raw value. ``literal_column('spanish')`` (not a bind param) so the
+        planner can use the matching GIN index from init_db.
+        """
+        fetch_n = max(limit * _OVERFETCH_FACTOR, _OVERFETCH_MIN)
+        with self._sf() as session:
+            config: ColumnElement[str] = literal_column("'spanish'")
+            tsv = func.to_tsvector(config, ChunkORM.text)
+            tsq = func.websearch_to_tsquery(config, query)
+            rank = func.ts_rank(tsv, tsq).label("rank")
+            stmt = select(ChunkORM, rank).where(tsv.op("@@")(tsq))
+            if municipality is not None:
+                stmt = stmt.where(ChunkORM.municipality == municipality)
+            if document_type is not None:
+                stmt = stmt.where(ChunkORM.document_type == document_type)
+            if source_id is not None:
+                stmt = stmt.where(ChunkORM.source_id == source_id)
+            stmt = stmt.order_by(rank.desc()).limit(fetch_n)
             ranked = (
                 (chunk_to_domain(row[0]), float(row[1]))
                 for row in session.execute(stmt).all()

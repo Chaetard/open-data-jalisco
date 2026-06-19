@@ -30,6 +30,34 @@ from .shared.logging import get_logger
 logger = get_logger(__name__)
 
 _REFERENCE_LEVELS = (STATE, FEDERAL)
+_RRF_K = 60  # standard Reciprocal Rank Fusion constant; dampens low ranks.
+
+
+def _fuse(
+    vector_matches: list[tuple[Chunk, float]],
+    lexical_matches: list[tuple[Chunk, float]],
+    *,
+    limit: int,
+) -> list[tuple[Chunk, float | None]]:
+    """Reciprocal Rank Fusion of the vector and lexical arms, keyed by chunk id.
+
+    RRF blends two lists using only each item's *rank*, not its score — which is
+    exactly why a vector distance and a ts_rank (different scales, opposite
+    directions) can be merged without normalising either. Keeps the vector
+    distance (for the informational hit score) when the chunk had one.
+    """
+    rrf: dict[UUID, float] = {}
+    chunks: dict[UUID, Chunk] = {}
+    distances: dict[UUID, float] = {}
+    for rank, (chunk, dist) in enumerate(vector_matches):
+        rrf[chunk.id] = rrf.get(chunk.id, 0.0) + 1.0 / (_RRF_K + rank)
+        chunks[chunk.id] = chunk
+        distances[chunk.id] = dist
+    for rank, (chunk, _score) in enumerate(lexical_matches):
+        rrf[chunk.id] = rrf.get(chunk.id, 0.0) + 1.0 / (_RRF_K + rank)
+        chunks.setdefault(chunk.id, chunk)
+    ordered = sorted(rrf, key=lambda cid: rrf[cid], reverse=True)[:limit]
+    return [(chunks[cid], distances.get(cid)) for cid in ordered]
 
 
 def _rerank_passage(doc: Document, chunk: Chunk) -> str:
@@ -58,22 +86,37 @@ def run_semantic_search(
     logger.info("search: start q=%r local_only=%s", q[:120], local_only)
     vector = embedder.embed_query(q)
 
-    # Only over-fetch when a post-step needs the extra candidates; otherwise the
-    # cheap path is byte-for-byte what it was before reranking existed.
-    needs_pool = reranker is not None or local_only
-    pool = max(limit, get_settings().rerank_pool) if needs_pool else limit
-    logger.info("search: db query (pool=%d)", pool)
-    matches = chunk_repo.semantic_search(
+    # Hybrid recall: vector (meaning) + lexical full-text (exact codes, names,
+    # amounts the embedder fragments into subwords). Always over-fetch a pool so
+    # both arms have candidates to fuse; the reranker — or RRF when there's none
+    # — decides the final order.
+    pool = max(limit, get_settings().rerank_pool)
+    logger.info("search: db query (pool=%d, hybrid)", pool)
+    vector_matches = chunk_repo.semantic_search(
         vector,
         limit=pool,
         municipality=municipality,
         document_type=document_type,
         source_id=source_id,
     )
+    lexical_matches = chunk_repo.lexical_search(
+        q,
+        limit=pool,
+        municipality=municipality,
+        document_type=document_type,
+        source_id=source_id,
+    )
+    matches = _fuse(vector_matches, lexical_matches, limit=pool)
+    logger.info(
+        "search: vector=%d lexical=%d -> fused=%d",
+        len(vector_matches),
+        len(lexical_matches),
+        len(matches),
+    )
 
     # Resolve each chunk's document. ponytail: N+1 get_by_id over the pool (<=50);
     # batch-fetch by id set if the pool ever grows past a few dozen.
-    enriched: list[tuple[Chunk, Document, float]] = []
+    enriched: list[tuple[Chunk, Document, float | None]] = []
     for chunk, distance in matches:
         doc = doc_repo.get_by_id(chunk.document_id)
         if doc is None:
@@ -97,7 +140,9 @@ def run_semantic_search(
     for idx, (chunk, doc, distance) in enumerate(enriched[:limit]):
         hits.append(
             SearchHit(
-                score=max(0.0, 1.0 - float(distance)),
+                # Lexical-only candidates have no vector distance; their real
+                # ranking comes from the reranker (or RRF). 0.0 is a placeholder.
+                score=max(0.0, 1.0 - distance) if distance is not None else 0.0,
                 rerank_score=rerank_scores[idx] if rerank_scores is not None else None,
                 chunk=chunk_to_out(chunk),
                 document=document_to_out(doc),

@@ -48,6 +48,21 @@ class FakeChunkRepo:
     ) -> list[tuple[Chunk, float]]:
         return [(c, 0.1) for c in self._chunks[:limit]]
 
+    def lexical_search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        municipality: str | None = None,
+        document_type: str | None = None,
+        source_id: UUID | None = None,
+    ) -> list[tuple[Chunk, float]]:
+        # Naive substring match stands in for Postgres FTS so hybrid search is
+        # exercisable without a DB.
+        q = query.lower()
+        hits = [(c, 1.0) for c in self._chunks if q in c.text.lower()]
+        return hits[:limit]
+
 
 class FakeDocRepo:
     def __init__(self, docs: list[Document]):

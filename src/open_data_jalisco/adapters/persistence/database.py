@@ -46,6 +46,16 @@ def init_db() -> None:
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        # GIN index backing the lexical (full-text) search arm. Must match the
+        # exact expression used in chunk_repository.lexical_search so the planner
+        # uses it. Created after create_all (the chunks table must exist).
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chunks_text_fts "
+                "ON chunks USING gin (to_tsvector('spanish', text))"
+            )
+        )
     logger.info("db.init.done url=%s", _redact(get_settings().database_url))
 
 
