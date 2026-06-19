@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from ..domain.chunk import Chunk
 from ..domain.document import Document
+from ..domain.jurisdiction import infer_jurisdiction
 from ..domain.source import Source
 
 
@@ -41,6 +42,10 @@ class DocumentOut(BaseModel):
     version: int
     is_current: bool
     superseded_by: UUID | None
+    # Inferred level of government (municipal | state | federal | unknown). The
+    # portal republishes state/federal reference material under the same
+    # municipality, so this lets clients badge or filter it. See domain.jurisdiction.
+    jurisdiction: str
 
 
 class ChunkOut(BaseModel):
@@ -61,6 +66,10 @@ class ChunkOut(BaseModel):
 
 class SearchHit(BaseModel):
     score: float
+    # Cross-encoder relevance score, present only when a reranker was applied.
+    # Unbounded (logit), comparable only within one response. Hits are ordered by
+    # this when set, otherwise by ``score``.
+    rerank_score: float | None = None
     chunk: ChunkOut
     document: DocumentOut
 
@@ -70,6 +79,8 @@ class SearchResponse(BaseModel):
     embedding_provider: str
     embedding_model: str
     embedding_dimension: int
+    # Reranker model name when a reranking stage ran, else null.
+    reranker: str | None = None
     hits: list[SearchHit]
 
 
@@ -79,6 +90,9 @@ class SearchRequest(BaseModel):
     municipality: str | None = None
     document_type: str | None = None
     source_id: UUID | None = None
+    # Hide republished state/federal reference material, keeping municipal-own
+    # (and unmarked) documents. See domain.jurisdiction.
+    local_only: bool = False
 
 
 class ManifestSummary(BaseModel):
@@ -123,6 +137,7 @@ def document_to_out(d: Document) -> DocumentOut:
         version=d.version,
         is_current=d.is_current,
         superseded_by=d.superseded_by,
+        jurisdiction=infer_jurisdiction(d.title),
     )
 
 

@@ -331,13 +331,14 @@ un hit).
 | `municipality` | string | `null` | | Filtra por municipio. |
 | `document_type` | string | `null` | [enum](#documenttype-document_type) | Filtra por tipo. |
 | `source_id` | UUID | `null` | | Filtra por fuente. |
+| `local_only` | bool | `false` | | Oculta material de referencia estatal/federal republicado, deja sólo lo municipal (y sin marcar). Ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
 
 ```bash
 curl -s -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
-  -d '{"q": "requisitos para licencia de construcción", "limit": 5}' | jq
+  -d '{"q": "presupuesto municipal", "limit": 5, "local_only": true}' | jq
 ```
 
 **Ejemplo de respuesta (recortado)**
@@ -379,7 +380,32 @@ curl -s -X POST http://localhost:8000/search \
 
 > Cuando los top hits tienen scores casi idénticos (ej. `0.868`–`0.872`), el embedder no
 > está discriminando bien — típico al usar lenguaje coloquial ciudadano contra documentos
-> en lenguaje legal/administrativo. Es una limitación conocida del retriever.
+> en lenguaje legal/administrativo. Es una limitación conocida del retriever, mitigada por
+> el reranking (abajo).
+
+#### Calidad de búsqueda: reranking y jurisdicción
+
+Dos mejoras opcionales sobre la búsqueda vectorial base, ambas activables sin migrar la DB:
+
+**1. Reranking (cross-encoder).** El embedder (bi-encoder) puntúa query y pasaje por
+separado y apelmaza resultados en un banco plano de scores. Si se activa
+`RERANK_PROVIDER=cross_encoder`, una segunda etapa cross-encoder lee `(query, pasaje)`
+juntos y reordena el top-N antes de truncar al `limit`. En la práctica separa el banco
+plano en un gradiente amplio y sube el documento correcto al `#1`. Cuando corre, cada hit
+trae `rerank_score` y la respuesta trae `reranker` con el modelo. Coste: ~470 MB de modelo
+y ~1-3 s/query en CPU. Desactivado (`none`) por defecto: sin coste, comportamiento idéntico.
+
+**2. Filtro de jurisdicción (`local_only`).** El portal municipal republica material de
+referencia *estatal* y *federal* (el presupuesto del Estado de Jalisco, leyes federales),
+todo bajo `municipality="Tala"`. Por eso "presupuesto municipal" devuelve los volúmenes del
+*Estado* arriba de los del municipio. Cada documento trae un badge `jurisdiction`
+(`municipal`/`state`/`federal`/`unknown`) inferido del título; con `local_only=true` la
+búsqueda oculta `state` y `federal`, dejando lo municipal (y lo no marcado, que nunca se
+oculta por error).
+
+Se combinan: el reranking ordena bien el conjunto, `local_only` garantiza que no se cuele
+referencia de otro nivel de gobierno. El badge `jurisdiction` está siempre presente aunque
+no se filtre, para que el frontend lo muestre.
 
 ---
 
@@ -397,11 +423,12 @@ Prefiere `POST` para frontends nuevos.
 | `municipality` | string | `null` | |
 | `document_type` | string | `null` | |
 | `source_id` | UUID | `null` | |
+| `local_only` | bool | `false` | |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
 
 ```bash
-curl -s "http://localhost:8000/search?q=presupuesto%20participativo&limit=5" | jq
+curl -s "http://localhost:8000/search?q=presupuesto%20municipal&limit=5&local_only=true" | jq
 ```
 
 ---
@@ -474,6 +501,7 @@ curl -s "http://localhost:8000/manifests?source_slug=tala" | jq
 | `version` | int | Versión del documento (≥ 1). |
 | `is_current` | bool | `false` si fue reemplazado. |
 | `superseded_by` | UUID \| null | Documento que lo reemplaza, si aplica. |
+| `jurisdiction` | string | Nivel de gobierno inferido del título: `municipal`, `state`, `federal`, `unknown`. Heurística — ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
 
 ### `ChunkOut`
 
@@ -501,7 +529,8 @@ Ver [`POST /search`](#post-search).
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `score` | float | `[0, 1]`, mayor = más relevante. Ver [interpretación](#cómo-interpretar-score). |
+| `score` | float | Similitud coseno `[0, 1]`, mayor = más relevante. Ver [interpretación](#cómo-interpretar-score). |
+| `rerank_score` | float \| null | Score del cross-encoder; presente sólo si hubo reranking. Logit sin acotar, comparable sólo dentro de una misma respuesta. Cuando está presente, los hits van ordenados por él (no por `score`). |
 | `chunk` | [`ChunkOut`](#chunkout) | El fragmento que hizo match. |
 | `document` | [`DocumentOut`](#documentout) | El documento padre. |
 
@@ -513,7 +542,8 @@ Ver [`POST /search`](#post-search).
 | `embedding_provider` | string | `dummy` o `local_st`. |
 | `embedding_model` | string | Ej. `intfloat/multilingual-e5-small`. |
 | `embedding_dimension` | int | Ej. `384`. |
-| `hits` | [`SearchHit`](#searchhit)[] | Ordenados por `score` desc, deduplicados por `sha256`. |
+| `reranker` | string \| null | Nombre del modelo de reranking si se aplicó, si no `null`. |
+| `hits` | [`SearchHit`](#searchhit)[] | Deduplicados por `sha256`. Ordenados por `rerank_score` si hubo reranking, si no por `score`. |
 
 > Si `embedding_provider` es `dummy`, los resultados **no son semánticamente útiles** (el
 > embedder de prueba devuelve vectores deterministas sin significado). En prod debe ser

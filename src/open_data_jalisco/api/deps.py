@@ -11,10 +11,12 @@ from ..adapters.persistence import (
     PostgresSourceRepository,
     get_session_factory,
 )
+from ..adapters.reranking import build_reranker
 from ..adapters.storage.local_filesystem import LocalFilesystemRawStorage
 from ..ports.embedding_provider import EmbeddingProvider
 from ..ports.raw_storage import RawStorage
 from ..ports.repositories import ChunkRepository, DocumentRepository, SourceRepository
+from ..ports.reranker import Reranker
 from ..shared.config import get_settings
 
 
@@ -41,6 +43,11 @@ def get_raw_storage() -> RawStorage:
 @lru_cache
 def get_embedding_provider() -> EmbeddingProvider:
     return build_embedding_provider()
+
+
+@lru_cache
+def get_reranker() -> Reranker | None:
+    return build_reranker()
 
 
 @lru_cache

@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     embedding_dimension: int = 384
     embedding_device: str = "cpu"
 
+    # Optional cross-encoder reranking stage. "none" (default) skips it: no model
+    # load, no latency, identical behaviour to before. "cross_encoder" reranks
+    # the vector top-N before truncating to the requested limit.
+    rerank_provider: Literal["none", "cross_encoder"] = "none"
+    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    rerank_device: str = "cpu"
+    # Candidates fetched (and reranked / jurisdiction-filtered) before slicing to
+    # the requested limit. Larger = better recall before reranking, slower.
+    rerank_pool: int = 50
+
     scraper_user_agent: str = "open-data-jalisco/0.1"
     scraper_timeout_seconds: int = 30
     scraper_max_retries: int = 3
