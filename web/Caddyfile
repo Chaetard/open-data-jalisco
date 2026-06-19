@@ -1,0 +1,19 @@
+# Caddy sirve el SPA y enruta la API en el mismo origen (sin CORS).
+# - SITE_ADDRESS=http://localhost (default) -> HTTP en :80.
+# - SITE_ADDRESS=odj.example.com           -> HTTPS automático (Let's Encrypt).
+# handle_path quita el prefijo /api antes de reenviar, porque el backend expone
+# las rutas en raíz (/search, /health, /ask…), igual que el proxy de Vite en dev.
+{$SITE_ADDRESS:http://localhost} {
+	encode gzip zstd
+
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# SPA: cualquier ruta desconocida cae a index.html (react-router).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

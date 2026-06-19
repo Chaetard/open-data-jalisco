@@ -67,6 +67,8 @@ def create_app() -> FastAPI:
             "Technical API for the open-data-jalisco platform. Exposes documents, "
             "sources, semantic search and integrity manifests."
         ),
+        # Prefijo externo cuando corre tras el proxy (Caddy /api/*). Vacío en dev.
+        root_path=settings.root_path,
         lifespan=lifespan,
     )
 

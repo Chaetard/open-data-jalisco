@@ -1,0 +1,19 @@
+{
+  "name": "Open Data Jalisco",
+  "short_name": "ODJ",
+  "description": "Consulta de documentos públicos municipales de Jalisco con trazabilidad hacia fuentes oficiales.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f2",
+  "theme_color": "#112018",
+  "lang": "es-MX",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

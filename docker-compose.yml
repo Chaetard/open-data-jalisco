@@ -1,22 +1,71 @@
+# Stack completo de Open Data Jalisco.
+#   Todo:        docker compose up -d --build
+#   Sólo la DB:  docker compose up -d postgres   (para dev local con `uv run`)
+# Config por variables en .env (copia .env.example). Nada que tocar en el front.
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: odj_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: odj
-      POSTGRES_PASSWORD: odj
-      POSTGRES_DB: open_data_jalisco
+      POSTGRES_USER: ${POSTGRES_USER:-odj}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odj}
+      POSTGRES_DB: ${POSTGRES_DB:-open_data_jalisco}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - odj_pg_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U odj -d open_data_jalisco"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-odj} -d $${POSTGRES_DB:-open_data_jalisco}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  api:
+    build:
+      context: .
+      args:
+        # Pon API_EXTRAS=local-embed en .env si usas EMBEDDING_PROVIDER=local_st
+        # o RERANK_PROVIDER=cross_encoder. Vacío = embedder `dummy` (imagen ligera).
+        EXTRAS: ${API_EXTRAS:-}
+    container_name: odj_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Dentro de la red de compose la DB es el host `postgres`, no localhost.
+      # Esto sobreescribe el DATABASE_URL del .env (que apunta a localhost para dev).
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-odj}:${POSTGRES_PASSWORD:-odj}@postgres:5432/${POSTGRES_DB:-open_data_jalisco}
+      # Caddy expone la API bajo /api -> las docs (/api/docs) cargan bien el spec.
+      ROOT_PATH: /api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Documentos originales y manifests persisten en el host.
+      - ./data:/app/data
+      - ./datasets:/app/datasets
+    expose:
+      - "8000"
+
+  web:
+    build: ./web
+    container_name: odj_web
+    restart: unless-stopped
+    environment:
+      # http://localhost (default) o tu dominio para HTTPS automático:
+      #   SITE_ADDRESS=odj.example.com
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
+    depends_on:
+      - api
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   odj_pg_data:
+  caddy_data:
+  caddy_config:

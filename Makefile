@@ -1,4 +1,4 @@
-.PHONY: help install dev fmt lint typecheck test test-unit test-integration db-up db-down db-logs db-shell init-db api api-legacy ingest process manifest clean
+.PHONY: help install dev fmt lint typecheck test test-unit test-integration up down logs db-up db-down db-logs db-shell init-db api api-legacy ingest process manifest clean
 
 help:
 	@echo "open-data-jalisco — comandos disponibles:"
@@ -12,7 +12,11 @@ help:
 	@echo "  test-unit         Solo tests unitarios (sin red, sin DB)"
 	@echo "  test-integration  Tests de integración (requieren Postgres)"
 	@echo ""
-	@echo "  db-up             Levanta Postgres+pgvector con Docker"
+	@echo "  up                Levanta TODO el stack (postgres + api + web) con Docker"
+	@echo "  down              Detiene todo el stack"
+	@echo "  logs              Sigue los logs de todo el stack"
+	@echo ""
+	@echo "  db-up             Levanta sólo Postgres+pgvector con Docker"
 	@echo "  db-down           Detiene Postgres"
 	@echo "  db-logs           Muestra logs de Postgres"
 	@echo "  db-shell          Abre psql en el contenedor"
@@ -47,6 +51,15 @@ test-unit:
 
 test-integration:
 	uv run pytest tests/integration -m integration
+
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f
 
 db-up:
 	docker compose up -d postgres

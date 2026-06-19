@@ -1,0 +1,32 @@
+# Build context de la imagen de la API. El front (web/) tiene su propia imagen.
+.git
+.venv
+**/__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.uv-cache
+.claude
+.agents
+
+# El SPA vive en web/ y se construye en su propia imagen — no entra a la API.
+web
+
+# Se montan como volúmenes en runtime, no van dentro de la imagen.
+data
+datasets/manifests
+
+# Secretos y locales
+.env
+.env.*
+*.log
+
+# Notas de mantenimiento, no publicables
+WALKTHROUGH.md
+TICKETS.md
+
+# Artefactos Docker
+Dockerfile
+.dockerignore
+docker-compose.yml

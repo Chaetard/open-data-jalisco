@@ -48,6 +48,10 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Cuando la API se sirve detrás de un reverse proxy bajo un prefijo (Caddy
+    # mapea /api/* -> aquí), pon ROOT_PATH=/api para que las URLs generadas de
+    # docs/openapi lleven el prefijo. Vacío para acceso directo (dev en :8000).
+    root_path: str = ""
 
     # Optional answering agent. Speaks the OpenAI Chat Completions API, so it
     # works with any OpenAI-compatible provider (Gemini via its compat endpoint,

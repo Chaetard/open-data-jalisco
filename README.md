@@ -217,10 +217,50 @@ open-data-jalisco/
   infra/postgres/init.sql       # pgvector + bootstrap del schema
   tests/unit/                   # sin DB, sin red
   tests/integration/            # ejercitan API + DB
+  web/                          # SPA del portal (Vite + React)
+    Dockerfile                  # build estático + Caddy (sirve SPA y proxy /api)
+    Caddyfile
+  Dockerfile                    # imagen de la API
+  docker-compose.yml            # stack completo: postgres + api + web
 ```
 
-## Setup
+> Monorepo: el backend vive en la raíz y el frontend en `web/`. El SPA llama al
+> backend por la ruta relativa `/api`, que Caddy enruta al contenedor `api` — así
+> el front no necesita configurarse: mismo origen, sin CORS, sin URLs hardcodeadas.
 
+## Despliegue (Docker — todo en uno)
+
+La forma más simple de correr la plataforma completa (base de datos, API y portal)
+en cualquier máquina. Sólo necesitas Docker; **no** instalas Python, Node ni `uv`,
+y **no** tocas nada del frontend: sólo editas variables.
+
+```bash
+git clone https://github.com/Chaetard/open-data-jalisco
+cd open-data-jalisco
+cp .env.example .env        # edita POSTGRES_PASSWORD, SITE_ADDRESS, LLM_API_KEY…
+docker compose up -d --build
+```
+
+Listo. El portal queda en <http://localhost> y la API detrás de `/api`
+(p.ej. <http://localhost/api/health>). En el primer arranque la API crea el
+schema automáticamente.
+
+| Variable | Para qué |
+|---|---|
+| `POSTGRES_PASSWORD` | Contraseña de Postgres (cámbiala en producción). |
+| `SITE_ADDRESS` | `http://localhost` (HTTP) o un dominio real → **HTTPS automático** (Let's Encrypt). |
+| `HTTP_PORT` / `HTTPS_PORT` | Puertos públicos del portal (default 80 / 443). |
+| `LLM_API_KEY` | Activa el agente de respuestas `POST /ask` (opcional; sin ella, el resto funciona igual). |
+| `EMBEDDING_PROVIDER` | `dummy` (default, sin descargas) o `local_st` para búsqueda semántica real. |
+
+Comandos equivalentes vía `make up` / `make down` / `make logs`.
+
+> Para servir en un dominio con HTTPS, apunta el DNS a la máquina y pon
+> `SITE_ADDRESS=tu-dominio.com`. Caddy emite y renueva el certificado solo.
+
+## Setup (desarrollo)
+
+Para trabajar en el código (hot-reload, tests, CLI) sin contenedores.
 El proyecto fija Python **3.12** vía `.python-version`. No uses tu Python del sistema — deja que `uv` provisione el intérprete.
 
 ### Linux / macOS

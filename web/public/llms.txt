@@ -1,0 +1,24 @@
+# Open Data Jalisco
+
+Open Data Jalisco es una iniciativa ciudadana, técnica, apartidista y open source para recopilar, preservar, organizar, consultar y verificar información pública municipal del estado de Jalisco, México.
+
+## Propósito
+
+Reducir la fricción para consultar documentos públicos municipales, manteniendo trazabilidad hacia fuentes oficiales, fechas de captura, hashes y manifests de integridad.
+
+## API local
+
+- Base URL de desarrollo: http://localhost:8000
+- Health: /health
+- Fuentes: /sources
+- Documentos: /documents
+- Búsqueda semántica: /search y /semantic-search
+- Manifests: /manifests
+
+## Principios
+
+- Neutralidad política.
+- Trazabilidad documental.
+- Integridad y preservación.
+- Acceso público y gratuito.
+- Protección de datos personales.
