@@ -35,8 +35,9 @@ No incluye código de implementación: incluye contratos, ejemplos de request/re
 | POST | `/search` | Búsqueda semántica con body JSON (preferido). |
 | POST | `/semantic-search` | Alias explícito de `POST /search`. |
 | GET | `/manifests` | Lista de manifests de integridad generados. |
+| POST | `/ask` | **Agente**: pregunta en lenguaje natural → respuesta redactada con citas. Requiere `LLM_API_KEY` en el backend; si no está configurado responde `503`. Ver §11. |
 
-Todos los endpoints son `GET` excepto los dos `POST` de búsqueda. No hay endpoints de mutación expuestos al frontend — ingesta/procesamiento ocurren vía CLI (`odj ingest`, `odj process`).
+Todos los endpoints son `GET` excepto los `POST` de búsqueda y `/ask`. No hay endpoints de mutación expuestos al frontend — ingesta/procesamiento ocurren vía CLI (`odj ingest`, `odj process`).
 
 ---
 
@@ -868,3 +869,119 @@ curl -s -X POST http://localhost:8000/search \
 #    Si la API también devuelve `hits: []`, mirá embedding_provider — si dice
 #    "dummy" tu .env apunta al provider tonto y por eso no encuentra nada.
 ```
+
+---
+
+## 11. Agente conversacional (`POST /ask`)
+
+Guía sin código de implementación: contrato, comportamiento, estados de UI y los detalles que el frontend necesita conocer para integrar el agente.
+
+### 11.1 Qué es y cuándo usarlo (vs `/search`)
+
+Son dos cosas distintas y conviene ofrecer ambas:
+
+| | `POST /search` | `POST /ask` |
+|---|---|---|
+| Devuelve | Lista de **fragmentos crudos** rankeados | Una **respuesta redactada** + fuentes citadas |
+| Quién lee/interpreta | El usuario | El agente lee por el usuario y resume |
+| Latencia | ~0.5–3 s | **~5–30 s o más** (varias búsquedas + llamadas al modelo) |
+| Buen caso de uso | "Quiero ver los documentos sobre X" | "¿Cuánto cuesta el trámite Y?", "¿Qué necesito para Z?" |
+| Requiere | Nada | `LLM_API_KEY` en el backend |
+
+Recomendación de UX: una sola caja de búsqueda con dos modos/botones — **"Ver documentos"** (`/search`) y **"Preguntar"** (`/ask`) — o una pestaña "Asistente" separada. No reemplaces la búsqueda por el agente: la búsqueda es rápida y siempre disponible; el agente es más lento y opcional.
+
+### 11.2 Contrato
+
+**Request** (`application/json`):
+
+| Campo | Tipo | Requerido | Notas |
+|---|---|---|---|
+| `question` | string | sí | Pregunta en lenguaje natural. Mínimo 3 caracteres (si no, `422`). |
+
+**Response `200`** (`AskResponse`):
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `answer` | string | Respuesta redactada en español, citando documentos por su título. |
+| `model` | string | Modelo LLM que respondió (ej. `gemini-2.5-pro`). Útil para mostrar "Generado por…". |
+| `iterations` | int | Cuántas vueltas de búsqueda/razonamiento tomó (1 = respondió a la primera). Informativo. |
+| `sources` | array | Documentos que el agente consultó. Ver tabla siguiente. Puede venir vacío si respondió sin necesitar buscar. |
+
+Cada objeto en `sources` (`AskSource`):
+
+| Campo | Tipo | Uso en UI |
+|---|---|---|
+| `title` | string \| null | Título del documento. Si es `null`, mostrar "Documento sin título". |
+| `url` | string | URL oficial del PDF. Hacer la card **clickable** a este enlace. |
+| `page_start` | int \| null | Página del fragmento citado. Mostrar "pág. 12" si no es `null`. |
+| `page_end` | int \| null | Última página del fragmento. |
+| `jurisdiction` | string | `municipal` / `state` / `federal` / `unknown`. Badge opcional. |
+
+Ejemplo de respuesta (contrato, no código de front):
+
+```json
+{
+  "answer": "Para una licencia de construcción necesitas presentar… (según el Reglamento de construcción municipal).",
+  "model": "gemini-2.5-pro",
+  "iterations": 2,
+  "sources": [
+    { "title": "Reglamento de construcción municipal", "url": "https://…", "page_start": 12, "page_end": 12, "jurisdiction": "municipal" }
+  ]
+}
+```
+
+Llamada de referencia para probar el endpoint:
+
+```bash
+curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
+  -d '{"question":"¿Qué requisitos piden para una licencia de construcción?"}' | jq .
+```
+
+### 11.3 Estados de UI que SÍ o SÍ hay que manejar
+
+1. **Latencia alta (lo más importante).** El agente hace varias búsquedas y una o más llamadas a un modelo remoto. Espera **5–30 s, a veces más**. No es como `/search`.
+   - Muestra un indicador de progreso con texto tranquilizador ("Buscando en los documentos del municipio…"), idealmente rotando el mensaje cada pocos segundos para que no parezca colgado.
+   - Pon un **timeout de cliente generoso**: igual o mayor a `LLM_TIMEOUT_SECONDS` del backend (por defecto 120 s). Un timeout corto (5–10 s) cortará respuestas válidas.
+   - No bloquees toda la UI: deja al usuario cancelar o seguir navegando.
+
+2. **Agente apagado → `503`.** Si el backend no tiene `LLM_API_KEY`, `/ask` responde `503` con `{ "detail": "Agent not configured. Set LLM_API_KEY…" }`.
+   - El frontend debe **degradar con elegancia**: ocultar o deshabilitar la función "Preguntar" y, si acaso, mostrar "El asistente no está disponible en esta instancia". La búsqueda (`/search`) sigue funcionando normal.
+   - No hay endpoint de "capabilities": la forma de saberlo es recibir un `503` (ver §11.4).
+
+3. **Respuesta "no encontré evidencia".** El agente está instruido para decir que no hay información en vez de inventar. Eso llega como un `200` normal con un `answer` que lo explica y `sources` posiblemente vacío. **No lo trates como error** — muéstralo tal cual.
+
+4. **Error del modelo / timeout / cuota → `500` o error de red.** El proveedor LLM remoto puede fallar o agotar cuota. Muestra un mensaje amable ("El asistente tuvo un problema, intenta de nuevo") y permite **reintentar**. No muestres el stack ni el detalle técnico crudo al ciudadano.
+
+5. **Sin streaming (por ahora).** La respuesta llega **completa de una sola vez**, no token por token. Si quieres efecto "máquina de escribir" es puramente cosmético del front; el backend no transmite parcial todavía (ver §11.6).
+
+### 11.4 Detectar si el agente está disponible
+
+No hay flag de capacidades. Opciones, de menos a más limpia:
+
+- **Reactiva (suficiente):** muestra el botón "Preguntar"; si la primera llamada devuelve `503`, ocúltalo y recuerda esa sesión que está apagado.
+- **Proactiva (opcional):** al cargar la app, una petición ligera a `/ask` con una pregunta trivial te dirá `200` (encendido) o `503` (apagado) — pero gasta una llamada al modelo, así que no abuses.
+
+Heads-up al equipo: si esto molesta, se puede exponer un flag (`agent_enabled`) en `/health` o `/stats` en el futuro. Hoy: `503` = apagado.
+
+### 11.5 Mostrar la respuesta y las fuentes (trazabilidad = confianza)
+
+El valor cívico del agente está en que **se puede verificar**. Reglas de presentación:
+
+- Muestra el `answer` como texto redactado, legible.
+- Debajo, lista **siempre** las `sources` como tarjetas/clickables que abren el `url` (el PDF oficial) en pestaña nueva. Incluye `title`, la página ("pág. 12") y, si quieres, el badge de `jurisdiction`.
+- Si `sources` está vacío pero hay `answer`, deja claro que es una respuesta sin documento citado (poco común; trátalo con cautela visual).
+- Opcional: muestra `model` en letra chica ("Respuesta generada por gemini-2.5-pro a partir de documentos públicos") — transparencia sobre que es IA, alineado con el principio del proyecto de IA como interfaz, no autoridad.
+
+### 11.6 Conversación de un solo turno (sin memoria)
+
+Cada `POST /ask` es **independiente**: el backend no recuerda preguntas anteriores. En la UI puedes mostrar un historial visual, pero cada pregunta se envía sola, sin contexto previo. Si el usuario hace una repregunta ("¿y para el otro trámite?"), debes reformularla completa antes de enviarla, o el agente no entenderá el "otro".
+
+Heads-up: el multi-turno (memoria de conversación) sería un cambio de backend (aceptar un historial de mensajes). No lo asumas disponible.
+
+### 11.7 Seguridad — la API key NUNCA toca el frontend
+
+La `LLM_API_KEY` vive **solo** en el backend (`.env`, gitignored). El frontend jamás la ve, ni la manda, ni la necesita: el front solo llama a **tu** `/ask`, y el backend hace la llamada al modelo con su key. No pongas claves de LLM en variables `VITE_*` ni en el bundle del cliente — quedarían expuestas a cualquiera.
+
+### 11.8 Pantalla mínima sugerida para validar
+
+Una vista "Asistente": caja de texto para la pregunta + botón "Preguntar" → estado de carga con mensaje → respuesta redactada + lista de fuentes clickables. Con eso validas el flujo completo end-to-end. Si `/ask` da `503`, esa vista debe ocultarse o mostrar el aviso de "no disponible".
