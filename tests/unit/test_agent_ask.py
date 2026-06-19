@@ -107,3 +107,21 @@ def test_agent_dedupes_sources_by_url():
     # Same hit returned on both searches → one source, not two.
     result = AskAgent(llm=llm, search=RecordingSearch([same]), max_iters=5).ask("x")
     assert len(result.sources) == 1
+
+
+def _scored_hit(url: str, score: float) -> SearchHit:
+    doc = make_document(title=f"Doc {url}")
+    chunk = make_chunk(doc, text="t")
+    out = document_to_out(doc).model_copy(update={"official_url": url})
+    return SearchHit(score=score, chunk=chunk_to_out(chunk), document=out)
+
+
+def test_agent_caps_and_ranks_sources():
+    # One search returns 8 distinct docs; only the 5 highest-scoring survive,
+    # ordered by score. Stops the agent from dumping every chunk it ever saw.
+    hits = [_scored_hit(f"https://x.invalid/{i}", score=i / 10) for i in range(8)]
+    llm = ScriptedLLM([_tool_call("q"), ChatResult(content="ok", tool_calls=[])])
+    result = AskAgent(llm=llm, search=RecordingSearch(hits), max_iters=5).ask("x")
+
+    assert len(result.sources) == 5
+    assert [s.url for s in result.sources] == [f"https://x.invalid/{i}" for i in (7, 6, 5, 4, 3)]

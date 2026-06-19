@@ -24,15 +24,52 @@ from ..ports.llm import ChatMessage, LLMClient
 SearchFn = Callable[[str, bool, int], list[SearchHit]]
 
 _SYSTEM_PROMPT = (
-    "Eres un asistente que responde preguntas sobre los documentos públicos del "
-    "municipio de Tala, Jalisco. Reglas:\n"
-    "- Responde SÓLO con información obtenida mediante la herramienta "
-    "search_documents. No uses conocimiento externo ni inventes datos.\n"
-    "- Si la primera búsqueda no basta, reformula la consulta y busca de nuevo "
-    "(puedes buscar varias veces).\n"
-    "- Si tras buscar no encuentras evidencia, dilo claramente; no rellenes.\n"
-    "- Cita los documentos por su título cuando afirmes algo.\n"
-    "- Responde en español, claro y conciso."
+    "Eres un asistente de transparencia que responde sobre los documentos "
+    "públicos del municipio de Tala, Jalisco. Tu trabajo es reportar lo que los "
+    "documentos dicen, no juzgar a la autoridad. Reglas:\n"
+    "\n"
+    "FUENTE\n"
+    "- Responde SÓLO con lo obtenido vía la herramienta search_documents. No uses "
+    "conocimiento externo ni inventes datos.\n"
+    "- Si una búsqueda no basta, reformúlala y busca de nuevo. Sé eficiente: 2 a 4 "
+    "búsquedas suelen bastar. No repitas consultas equivalentes.\n"
+    "\n"
+    "REGLA DE ORO — ausencia de evidencia ≠ cero\n"
+    "- NUNCA conviertas «no lo encontré» en «no existe», «es $0», «no se gastó» o "
+    "«hay subejercicio». Que un monto no aparezca en los documentos recuperados "
+    "sólo significa que NO LO ENCONTRASTE ahí, no que sea cero.\n"
+    "- Si no hallas una cifra, di: «No se encontró un monto específico para X en "
+    "los documentos recuperados», y enumera las posibles causas cuando aplique "
+    "(no se desglosa a ese nivel, está agrupado en un nivel superior, el documento "
+    "correcto no se consultó, etc.).\n"
+    "\n"
+    "TONO — neutral, no acusatorio\n"
+    "- Este es un servicio público. NO imputes irregularidades, dolo, desvío, "
+    "incumplimiento ni «subejercicio» a partir de datos faltantes o parciales. "
+    "Reporta hechos documentales, no juicios sobre la conducta de la autoridad.\n"
+    "\n"
+    "CALIDAD DE CADA AFIRMACIÓN — etiqueta lo que digas\n"
+    "- Distingue siempre: ENCONTRADO (está textual en un documento), NO ENCONTRADO "
+    "(no aparece en lo recuperado), INFERIDO (lo deduces, dilo) y NO VERIFICABLE "
+    "(haría falta otro documento: contratos, facturas, órdenes de compra, actas).\n"
+    "\n"
+    "PRESUPUESTO ≠ EJECUCIÓN\n"
+    "- No confundas lo PROGRAMADO/APROBADO/CALENDARIZADO (lo que se planeó gastar) "
+    "con lo EJECUTADO: DEVENGADO, EJERCIDO o PAGADO (lo que realmente se gastó). "
+    "El calendario mensual NO prueba ejecución.\n"
+    "- Niveles del Clasificador por Objeto del Gasto, de mayor a menor: capítulo "
+    "(p.ej. 3000) ⊃ concepto (3300) ⊃ partida (333). Sé explícito sobre cuál "
+    "citas y no mezcles niveles: una cifra de la 333 no es la del 3300.\n"
+    "\n"
+    "EVIDENCIA EXACTA\n"
+    "- Para cualquier cifra, cita la fila/columna exacta del documento (partida o "
+    "concepto y la columna: aprobado, modificado, devengado, ejercido, pagado) más "
+    "el título del documento y la página. No reportes montos sin su renglón.\n"
+    "\n"
+    "RESPUESTA\n"
+    "- Cita por su título SÓLO los documentos que realmente usaste (máximo 5). No "
+    "enumeres todo lo que viste.\n"
+    "- Español claro y conciso. Si no encuentras evidencia, dilo; no rellenes."
 )
 
 _SEARCH_TOOL: dict[str, Any] = {
@@ -67,6 +104,11 @@ _SEARCH_TOOL: dict[str, Any] = {
 
 _TOOL_HIT_LIMIT = 6
 _SNIPPET_CHARS = 500
+# Cap the sources returned to the user. The agent may consult dozens of chunks
+# across several searches; surfacing all of them implies they were all used and
+# drowns the few that mattered. Keep the highest-scoring distinct documents.
+# ponytail: score proxy for "used"; swap for model-emitted citations if needed.
+_MAX_SOURCES = 5
 
 
 @dataclass
@@ -97,14 +139,16 @@ class AskAgent:
             ChatMessage(role="system", content=_SYSTEM_PROMPT),
             ChatMessage(role="user", content=question),
         ]
-        sources: dict[str, Source] = {}  # keyed by url, dedupes across searches
+        # url -> (best score seen, Source). Dedupes across searches and lets us
+        # keep only the most relevant few at the end.
+        sources: dict[str, tuple[float, Source]] = {}
 
         for i in range(self._max_iters):
             result = self._llm.chat(messages, tools=[_SEARCH_TOOL])
             if not result.tool_calls:
                 return AskResult(
                     answer=result.content or "",
-                    sources=list(sources.values()),
+                    sources=_top_sources(sources),
                     iterations=i + 1,
                     model=self._llm.model,
                 )
@@ -119,7 +163,10 @@ class AskAgent:
             for call in result.tool_calls:
                 hits = self._run_tool(call.name, call.arguments)
                 for hit in hits:
-                    sources[hit.document.official_url] = _to_source(hit)
+                    score = hit.rerank_score if hit.rerank_score is not None else hit.score
+                    prev = sources.get(hit.document.official_url)
+                    if prev is None or score > prev[0]:
+                        sources[hit.document.official_url] = (score, _to_source(hit))
                 messages.append(
                     ChatMessage(
                         role="tool",
@@ -134,7 +181,7 @@ class AskAgent:
         final = self._llm.chat(messages, tools=None)
         return AskResult(
             answer=final.content or "No pude llegar a una respuesta con la evidencia encontrada.",
-            sources=list(sources.values()),
+            sources=_top_sources(sources),
             iterations=self._max_iters,
             model=self._llm.model,
         )
@@ -151,6 +198,11 @@ class AskAgent:
             return []
         local_only = bool(args.get("local_only", True))
         return self._search(query, local_only, _TOOL_HIT_LIMIT)
+
+
+def _top_sources(sources: dict[str, tuple[float, Source]]) -> list[Source]:
+    ordered = sorted(sources.values(), key=lambda p: p[0], reverse=True)
+    return [s for _, s in ordered[:_MAX_SOURCES]]
 
 
 def _to_source(hit: SearchHit) -> Source:
