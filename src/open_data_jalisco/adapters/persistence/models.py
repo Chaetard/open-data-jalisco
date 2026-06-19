@@ -51,6 +51,9 @@ class DocumentORM(Base):
     )
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Content-derived title (see Document.inferred_title). Added to existing DBs
+    # via ALTER in init_db; created here for fresh DBs.
+    inferred_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     document_type: Mapped[str] = mapped_column(String(64), index=True)
     municipality: Mapped[str] = mapped_column(String(128), index=True)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

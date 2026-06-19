@@ -425,6 +425,51 @@ def process(
     console.print_json(data=result.__dict__)
 
 
+@app.command(name="infer-titles")
+def infer_titles(
+    limit: Annotated[int, typer.Option(help="Documentos a titular por corrida.")] = 100,
+) -> None:
+    """Genera un título legible por documento, a partir de su contenido (LLM).
+
+    Resuelve la desconfianza por nombres de archivo crípticos. Resumible: salta
+    los que ya tienen título y los que necesitan OCR (sin texto). Requiere
+    ``LLM_API_KEY`` (mismo modelo que el agente).
+    """
+    from .adapters.llm import build_llm_client
+    from .adapters.persistence import (
+        PostgresChunkRepository,
+        PostgresDocumentRepository,
+        get_session_factory,
+    )
+    from .titling import infer_title
+
+    llm = build_llm_client()
+    if llm is None:
+        console.print("[red]LLM_API_KEY no configurada — no se puede titular.[/red]")
+        raise typer.Exit(code=2)
+
+    sf = get_session_factory()
+    doc_repo = PostgresDocumentRepository(sf)
+    chunk_repo = PostgresChunkRepository(sf)
+
+    docs = doc_repo.list_missing_inferred_title(limit=limit)
+    titled = 0
+    for doc in docs:
+        chunks = chunk_repo.list_by_document(doc.id)
+        if not chunks:
+            continue
+        text = "\n".join(c.text for c in chunks[:2])
+        title = infer_title(llm, text=text, municipality=doc.municipality, year=doc.year)
+        if not title:
+            continue
+        doc.inferred_title = title
+        doc_repo.update(doc)
+        titled += 1
+        console.print(f"[green]{title}[/green]  <- {doc.storage_path}")
+
+    console.print_json(data={"considered": len(docs), "titled": titled})
+
+
 @app.command()
 def manifest(
     source: Annotated[str, typer.Argument(help="slug de la fuente.")],

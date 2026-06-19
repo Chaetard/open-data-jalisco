@@ -75,6 +75,7 @@ class PostgresDocumentRepository:
             orm.needs_ocr = document.needs_ocr
             orm.extraction_error = document.extraction_error
             orm.title = document.title
+            orm.inferred_title = document.inferred_title
             orm.document_type = document.document_type.value
             orm.year = document.year
             orm.metadata_json = document.metadata
@@ -108,6 +109,25 @@ class PostgresDocumentRepository:
                 stmt = stmt.where(DocumentORM.year == year)
             stmt = stmt.order_by(DocumentORM.captured_at.desc()).limit(limit).offset(offset)
             rows = session.scalars(stmt).all()
+            return [document_to_domain(r) for r in rows]
+
+    def list_missing_inferred_title(self, limit: int = 100) -> list[Document]:
+        """Current, text-bearing docs that still lack a content-derived title.
+
+        Skips needs_ocr docs (no extractable text to title from). Concrete-only
+        (not on the port): titling is a CLI/ingest concern, not a search one.
+        """
+        with self._sf() as session:
+            rows = session.scalars(
+                select(DocumentORM)
+                .where(
+                    DocumentORM.is_current.is_(True),
+                    DocumentORM.inferred_title.is_(None),
+                    DocumentORM.needs_ocr.is_(False),
+                )
+                .order_by(DocumentORM.created_at.asc())
+                .limit(limit)
+            ).all()
             return [document_to_domain(r) for r in rows]
 
     def list_pending(

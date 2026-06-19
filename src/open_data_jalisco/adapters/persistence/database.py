@@ -56,6 +56,11 @@ def init_db() -> None:
                 "ON chunks USING gin (to_tsvector('spanish', text))"
             )
         )
+        # create_all adds columns only to NEW tables; existing DBs need the
+        # content-derived title column added explicitly. Idempotent.
+        conn.execute(
+            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS inferred_title text")
+        )
     logger.info("db.init.done url=%s", _redact(get_settings().database_url))
 
 

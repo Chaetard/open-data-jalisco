@@ -23,6 +23,8 @@ class AskRequest(BaseModel):
 
 class AskSource(BaseModel):
     title: str | None
+    # Content-derived, readable title — prefer it over `title` for display.
+    inferred_title: str | None = None
     url: str
     page_start: int | None
     page_end: int | None
@@ -62,6 +64,7 @@ def ask(
         sources=[
             AskSource(
                 title=s.title,
+                inferred_title=s.inferred_title,
                 url=s.url,
                 page_start=s.page_start,
                 page_end=s.page_end,

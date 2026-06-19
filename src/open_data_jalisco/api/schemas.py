@@ -28,6 +28,9 @@ class DocumentOut(BaseModel):
     source_id: UUID
     sha256: str
     title: str | None
+    # Content-derived title (readable; the filename-based `title` is unreliable).
+    # null until the `infer-titles` job runs. Prefer this for display.
+    inferred_title: str | None
     document_type: str
     municipality: str
     year: int | None
@@ -126,6 +129,7 @@ def document_to_out(d: Document) -> DocumentOut:
         source_id=d.source_id,
         sha256=d.sha256,
         title=d.title,
+        inferred_title=d.inferred_title,
         document_type=d.document_type.value,
         municipality=d.municipality,
         year=d.year,

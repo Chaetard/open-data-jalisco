@@ -539,7 +539,8 @@ curl -s -X POST http://localhost:8000/ask \
 | `id` | UUID | |
 | `source_id` | UUID | |
 | `sha256` | string (64 hex) | Hash del binario. PDFs idénticos comparten sha256. |
-| `title` | string \| null | |
+| `title` | string \| null | Derivado del nombre de archivo; **poco confiable**. |
+| `inferred_title` | string \| null | Título legible derivado del **contenido** (LLM). `null` hasta correr `infer-titles`. Prefiérelo para mostrar. |
 | `document_type` | string | [`DocumentType`](#documenttype-document_type). |
 | `municipality` | string | |
 | `year` | int \| null | |
@@ -637,7 +638,8 @@ Ver [`POST /search`](#post-search).
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `title` | string \| null | Título del documento. |
+| `title` | string \| null | Derivado del nombre de archivo; poco confiable. |
+| `inferred_title` | string \| null | Título legible derivado del contenido. Prefiérelo para mostrar. |
 | `url` | string | URL oficial. |
 | `page_start` | int \| null | Página del fragmento citado. |
 | `page_end` | int \| null | |

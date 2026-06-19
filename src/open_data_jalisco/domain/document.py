@@ -22,6 +22,9 @@ class Document:
     municipality: str
     document_type: DocumentType = DocumentType.UNKNOWN
     title: str | None = None
+    # Human-readable title generated from the document's content (not its
+    # filename, which is unreliable). Populated by the `infer-titles` job.
+    inferred_title: str | None = None
     year: int | None = None
     captured_url: str | None = None
     processing_status: ProcessingStatus = ProcessingStatus.PENDING

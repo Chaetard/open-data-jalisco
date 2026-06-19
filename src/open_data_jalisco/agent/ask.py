@@ -131,6 +131,8 @@ class Source:
     # unreliable; the excerpt is the verifiable evidence, so the UI can show the
     # quote and let the reader judge it regardless of the title.
     excerpt: str
+    # Content-derived title (readable); null until the infer-titles job runs.
+    inferred_title: str | None = None
 
 
 @dataclass
@@ -246,6 +248,7 @@ def _to_source(hit: SearchHit) -> Source:
         page_end=hit.chunk.page_end,
         jurisdiction=hit.document.jurisdiction,
         excerpt=_excerpt(hit.chunk.text),
+        inferred_title=hit.document.inferred_title,
     )
 
 

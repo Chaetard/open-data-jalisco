@@ -24,12 +24,13 @@ class _FakeAgent:
             answer="Respuesta basada en los documentos.",
             sources=[
                 Source(
-                    title="Reglamento municipal",
+                    title="RegGilbertoTorres_2026.pdf",
                     url="https://example.invalid/doc",
                     page_start=3,
                     page_end=3,
                     jurisdiction="municipal",
                     excerpt="Artículo 5: los requisitos son A, B y C.",
+                    inferred_title="Reglamento municipal de construcción, 2026",
                 )
             ],
             iterations=2,
@@ -46,7 +47,8 @@ def test_ask_returns_answer_and_sources():
     assert body["answer"] == "Respuesta basada en los documentos."
     assert body["model"] == "fake-llm"
     assert body["iterations"] == 2
-    assert body["sources"][0]["title"] == "Reglamento municipal"
+    assert body["sources"][0]["title"] == "RegGilbertoTorres_2026.pdf"
+    assert body["sources"][0]["inferred_title"] == "Reglamento municipal de construcción, 2026"
     assert body["sources"][0]["jurisdiction"] == "municipal"
     assert body["sources"][0]["excerpt"].startswith("Artículo 5")
 
