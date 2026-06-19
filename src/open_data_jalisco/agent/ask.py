@@ -12,6 +12,7 @@ except through the tool.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -70,9 +71,24 @@ _SYSTEM_PROMPT = (
     "concepto y la columna: aprobado, modificado, devengado, ejercido, pagado) más "
     "el título del documento y la página. No reportes montos sin su renglón.\n"
     "\n"
+    "VIGENCIA — marca el estatus temporal\n"
+    "- Cuando uses documentos de años distintos, etiqueta cada hallazgo: VIGENTE "
+    "(periodo actual), HISTÓRICO (periodo pasado ya cerrado), ANTECEDENTE "
+    "DOCUMENTAL (sirve de contexto, no prueba el estado actual) o NO VERIFICABLE.\n"
+    "- Para afirmar el estado ACTUAL usa el documento más reciente; los anteriores "
+    "son antecedente, no evidencia de vigencia. No mezcles años sin marcarlos.\n"
+    "\n"
+    "CERTEZA — calíbrala, no la infles\n"
+    "- Separa la certeza de la MENCIÓN de la certeza del HECHO COMPLETO. Una póliza "
+    "de egreso da certeza ALTA de que se registró contablemente un pago, pero "
+    "certeza MEDIA de que eso represente la obra completa, el contrato total o el "
+    "proveedor final — eso exige contrato/factura/estimación. No declares 'certeza "
+    "alta' sobre el hecho completo con sólo evidencia contable o presupuestal.\n"
+    "\n"
     "RESPUESTA\n"
-    "- Cita por su título SÓLO los documentos que realmente usaste (máximo 5). No "
-    "enumeres todo lo que viste.\n"
+    "- Cita por su título los documentos que realmente usaste (todos los que "
+    "sustenten un hallazgo), no los que sólo hojeaste. Cada hallazgo debe poder "
+    "rastrearse a un documento citado.\n"
     "- Español claro y conciso. Si no encuentras evidencia, dilo; no rellenes."
 )
 
@@ -113,11 +129,24 @@ _TOOL_HIT_LIMIT = 6
 _SNIPPET_CHARS = 500
 # Length of the verifiable excerpt carried back to the UI per source.
 _EXCERPT_CHARS = 300
-# Cap the sources returned to the user. The agent may consult dozens of chunks
-# across several searches; surfacing all of them implies they were all used and
-# drowns the few that mattered. Keep the highest-scoring distinct documents.
-# ponytail: score proxy for "used"; swap for model-emitted citations if needed.
-_MAX_SOURCES = 5
+# Final sources should track what the answer actually cites, not the top-N by
+# retrieval score (that dropped documents the agent named in its prose, e.g.
+# "PE-298"). We keep every consulted document whose title is mentioned in the
+# answer (up to a safety cap), and fall back to the most relevant few only when
+# the model named nothing matchable.
+# ponytail: title-overlap heuristic; swap for model-emitted citation ids if the
+# model ever cites without echoing a title token.
+_MAX_CITED = 12
+_FALLBACK_SOURCES = 5
+# Spanish function words + the ever-present municipality: too common to signal
+# that a specific document was cited.
+_STOPWORDS = frozenset(
+    {
+        "de", "la", "el", "los", "las", "del", "y", "en", "por", "para", "con",
+        "un", "una", "al", "lo", "su", "sus", "o", "e", "municipio", "tala",
+        "jalisco", "documento", "documentos",
+    }
+)
 
 
 @dataclass
@@ -164,15 +193,18 @@ class AskAgent:
             logger.info("ask: iter %d/%d -> llm", i + 1, self._max_iters)
             result = self._llm.chat(messages, tools=[_SEARCH_TOOL])
             if not result.tool_calls:
+                answer = result.content or ""
+                selected = _select_sources(answer, sources)
                 logger.info(
-                    "ask: answered after %d iters in %.1fs (%d sources)",
+                    "ask: answered after %d iters in %.1fs (%d cited / %d consulted)",
                     i + 1,
                     time.perf_counter() - start,
+                    len(selected),
                     len(sources),
                 )
                 return AskResult(
-                    answer=result.content or "",
-                    sources=_top_sources(sources),
+                    answer=answer,
+                    sources=selected,
                     iterations=i + 1,
                     model=self._llm.model,
                 )
@@ -208,9 +240,10 @@ class AskAgent:
             time.perf_counter() - start,
         )
         final = self._llm.chat(messages, tools=None)
+        answer = final.content or "No pude llegar a una respuesta con la evidencia encontrada."
         return AskResult(
-            answer=final.content or "No pude llegar a una respuesta con la evidencia encontrada.",
-            sources=_top_sources(sources),
+            answer=answer,
+            sources=_select_sources(answer, sources),
             iterations=self._max_iters,
             model=self._llm.model,
         )
@@ -235,9 +268,55 @@ class AskAgent:
         return hits
 
 
-def _top_sources(sources: dict[str, tuple[float, Source]]) -> list[Source]:
-    ordered = sorted(sources.values(), key=lambda p: p[0], reverse=True)
-    return [s for _, s in ordered[:_MAX_SOURCES]]
+def _select_sources(answer: str, sources: dict[str, tuple[float, Source]]) -> list[Source]:
+    """Keep the consulted documents the answer actually cites.
+
+    Traceability fix: the final list must match the findings in the prose. A
+    document counts as cited when a distinctive token of its title (a word >=4
+    chars or a code like ``PE-298``/``COMUR_POA25``) appears in the answer. When
+    nothing matches (model summarised without naming docs) fall back to the most
+    relevant few so the list is never empty.
+    """
+    by_score = [s for _, s in sorted(sources.values(), key=lambda p: p[0], reverse=True)]
+    answer_words = set(_norm(answer).split())
+    answer_codes = _codes(answer)
+    cited = [s for s in by_score if _is_cited(answer_words, answer_codes, s)]
+    if cited:
+        return cited[:_MAX_CITED]
+    return by_score[:_FALLBACK_SOURCES]
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _title_tokens(title: str) -> set[str]:
+    # Distinctive words: drop stopwords and bare numbers (years collide across
+    # documents); keep real words (>=4) and alphanumeric codes (poa25).
+    out = set()
+    for t in _norm(title).split():
+        if t in _STOPWORDS or t.isdigit():
+            continue
+        if len(t) >= 4 or any(c.isdigit() for c in t):
+            out.add(t)
+    return out
+
+
+def _codes(text: str) -> set[str]:
+    # Compact identifiers like PE-298, COMUR_POA25, POA25 -> {"pe298","poa25"}.
+    found = re.findall(r"[a-zA-Z]{2,}[-_ ]?\d{2,}|[A-Z]{2,}\d+", text)
+    return {re.sub(r"[^a-z0-9]", "", m.lower()) for m in found}
+
+
+def _is_cited(answer_words: set[str], answer_codes: set[str], src: Source) -> bool:
+    for cand in (src.inferred_title, src.title):
+        if not cand:
+            continue
+        if _title_tokens(cand) & answer_words:
+            return True
+        if _codes(cand) & answer_codes:
+            return True
+    return False
 
 
 def _to_source(hit: SearchHit) -> Source:

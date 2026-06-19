@@ -116,6 +116,39 @@ def _scored_hit(url: str, score: float) -> SearchHit:
     return SearchHit(score=score, chunk=chunk_to_out(chunk), document=out)
 
 
+def _titled_hit(title: str, url: str) -> SearchHit:
+    doc = make_document(title=title)
+    chunk = make_chunk(doc, text="contenido")
+    out = document_to_out(doc).model_copy(update={"official_url": url})
+    return SearchHit(score=0.9, chunk=chunk_to_out(chunk), document=out)
+
+
+def test_sources_track_documents_cited_in_the_answer():
+    # Three docs consulted; the final answer names only two (by code / title).
+    # Only those two surface — the third must not, even though it was retrieved.
+    hits = [
+        _titled_hit("PE-298 26 Octubre 2023", "https://x.invalid/pe298"),
+        _titled_hit("Leyes de Ingreso Tala 2021", "https://x.invalid/ingreso"),
+        _titled_hit("COMUR_POA25 Plan Operativo", "https://x.invalid/comur"),
+    ]
+    llm = ScriptedLLM(
+        [
+            _tool_call("egresos"),
+            ChatResult(
+                content=(
+                    "Hallazgo: la póliza PE-298 registra un pago (HISTÓRICO). "
+                    "Las Leyes de Ingreso Tala 2021 son antecedente documental."
+                ),
+                tool_calls=[],
+            ),
+        ]
+    )
+    result = AskAgent(llm=llm, search=RecordingSearch(hits), max_iters=5).ask("egresos")
+    urls = {s.url for s in result.sources}
+    assert urls == {"https://x.invalid/pe298", "https://x.invalid/ingreso"}
+    assert "https://x.invalid/comur" not in urls  # consulted but never cited
+
+
 def test_agent_caps_and_ranks_sources():
     # One search returns 8 distinct docs; only the 5 highest-scoring survive,
     # ordered by score. Stops the agent from dumping every chunk it ever saw.
