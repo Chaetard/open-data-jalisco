@@ -31,6 +31,7 @@ existe.
    - [GET /search](#get-search)
    - [POST /semantic-search](#post-semantic-search)
    - [GET /manifests](#get-manifests)
+   - [POST /ask](#post-ask)
 8. [Esquemas](#esquemas)
 9. [OpenAPI / Swagger](#openapi--swagger)
 10. [Recetas](#recetas)
@@ -465,6 +466,56 @@ curl -s "http://localhost:8000/manifests?source_slug=tala" | jq
 
 ---
 
+### `POST /ask`
+
+Agente de respuestas. Recibe una pregunta en lenguaje natural; internamente busca
+en los documentos del municipio (con la misma búsqueda semántica + reranking +
+`local_only`), razona, vuelve a buscar si hace falta, y responde citando los
+documentos que usó.
+
+**Deshabilitado por defecto.** Sólo responde si el operador configuró `LLM_API_KEY`.
+Si no, devuelve `503`. El agente habla la API OpenAI Chat Completions, así que el
+operador puede usar **cualquier** proveedor/modelo compatible (Gemini, OpenAI, Groq,
+local…) vía `LLM_API_BASE` / `LLM_MODEL`.
+
+**Request body**
+
+| Campo | Tipo | Rango | Descripción |
+|---|---|---|---|
+| `question` | string | `≥ 3` chars | Pregunta en lenguaje natural. |
+
+**Respuesta `200`** — [`AskResponse`](#askresponse)
+**Respuesta `503`** — `{ "detail": "Agent not configured. Set LLM_API_KEY..." }`
+
+```bash
+curl -s -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "¿Qué requisitos piden para una licencia de construcción?"}' | jq
+```
+
+```json
+{
+  "answer": "Para una licencia de construcción necesitas… (según el Reglamento de construcción municipal).",
+  "model": "gemini-2.5-pro",
+  "iterations": 2,
+  "sources": [
+    {
+      "title": "Reglamento de construcción municipal",
+      "url": "https://…",
+      "page_start": 12,
+      "page_end": 12,
+      "jurisdiction": "municipal"
+    }
+  ]
+}
+```
+
+> El agente sólo ve el corpus a través de la herramienta de búsqueda y se le
+> instruye a no inventar: si no hay evidencia, lo dice. `iterations` es cuántas
+> vueltas de razonamiento/búsqueda tomó (acotado por `LLM_MAX_ITERS`).
+
+---
+
 ## Esquemas
 
 ### `SourceOut`
@@ -571,6 +622,25 @@ Ver [`POST /search`](#post-search).
 | `generated_at` | string \| null | |
 | `document_count` | int \| null | Documentos al momento del snapshot. |
 | `pipeline_version` | string \| null | |
+
+### `AskResponse`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `answer` | string | Respuesta en prosa, citando documentos. |
+| `model` | string | Modelo LLM usado (ej. `gemini-2.5-pro`). |
+| `iterations` | int | Vueltas de búsqueda/razonamiento que tomó. |
+| `sources` | `AskSource[]` | Documentos consultados (dedup por URL). |
+
+### `AskSource`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `title` | string \| null | Título del documento. |
+| `url` | string | URL oficial. |
+| `page_start` | int \| null | Página del fragmento citado. |
+| `page_end` | int \| null | |
+| `jurisdiction` | string | `municipal`/`state`/`federal`/`unknown`. |
 
 ---
 

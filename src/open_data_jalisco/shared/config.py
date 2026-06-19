@@ -48,6 +48,17 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+
+    # Optional answering agent. Speaks the OpenAI Chat Completions API, so it
+    # works with any OpenAI-compatible provider (Gemini via its compat endpoint,
+    # OpenAI, Groq, a local server…) — the deployer picks the model. Empty
+    # llm_api_key = agent disabled (POST /ask returns 503, nothing else changes).
+    llm_api_base: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    llm_api_key: str = ""
+    llm_model: str = "gemini-2.5-pro"
+    llm_max_iters: int = 5
+    llm_timeout_seconds: int = 60
+    llm_temperature: float = 0.2
     # Comma-separated list of allowed Origins for CORS. Vite default is
     # http://localhost:5173, CRA default is http://localhost:3000. Override in
     # .env for prod (e.g. CORS_ORIGINS="https://odj.example.com").

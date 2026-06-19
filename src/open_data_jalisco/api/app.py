@@ -10,7 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from .. import __version__
 from ..shared.config import get_settings
 from ..shared.logging import configure_logging, get_logger
-from .routers import documents, health, manifests, search, source, sources, stats
+from .routers import (
+    ask,
+    documents,
+    health,
+    manifests,
+    search,
+    source,
+    sources,
+    stats,
+)
 
 logger = get_logger(__name__)
 
@@ -86,6 +95,7 @@ def create_app() -> FastAPI:
         search.semantic_router, prefix="/semantic-search", tags=["search"]
     )
     app.include_router(manifests.router, prefix="/manifests", tags=["manifests"])
+    app.include_router(ask.router, tags=["agent"])
     return app
 
 
