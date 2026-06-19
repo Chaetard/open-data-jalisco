@@ -58,16 +58,16 @@ def _client(*, reranker) -> TestClient:
 
 def test_documents_carry_jurisdiction_badge():
     client = _client(reranker=None)
-    body = client.post("/search", json={"q": "presupuesto"}).json()
+    body = client.post("/search", json={"q": "presupuesto", "local_only": False}).json()
     by_title = {h["document"]["title"]: h["document"]["jurisdiction"] for h in body["hits"]}
     assert by_title[STATE_TITLE] == "state"
     assert by_title[FEDERAL_TITLE] == "federal"
     assert by_title[MUNICIPAL_TITLE] == "municipal"
 
 
-def test_default_path_unchanged_when_no_reranker():
+def test_full_corpus_path_unchanged_when_no_reranker():
     client = _client(reranker=None)
-    body = client.post("/search", json={"q": "presupuesto"}).json()
+    body = client.post("/search", json={"q": "presupuesto", "local_only": False}).json()
     assert body["reranker"] is None
     assert [h["document"]["title"] for h in body["hits"]] == [
         STATE_TITLE,
@@ -79,7 +79,9 @@ def test_default_path_unchanged_when_no_reranker():
 
 def test_reranker_reorders_and_reports_scores():
     client = _client(reranker=FakeReranker())
-    body = client.post("/search", json={"q": "presupuesto municipal"}).json()
+    body = client.post(
+        "/search", json={"q": "presupuesto municipal", "local_only": False}
+    ).json()
     assert body["reranker"] == "fake-rerank-v1"
     titles = [h["document"]["title"] for h in body["hits"]]
     assert titles == [MUNICIPAL_TITLE, STATE_TITLE, FEDERAL_TITLE]
@@ -88,8 +90,18 @@ def test_reranker_reorders_and_reports_scores():
     assert scores == sorted(scores, reverse=True)
 
 
-def test_local_only_hides_state_and_federal():
+def test_state_and_federal_hidden_by_default():
+    # local_only defaults to true: the state budget / federal law are noise and
+    # must not appear unless the caller explicitly asks for the full corpus.
     client = _client(reranker=None)
-    body = client.post("/search", json={"q": "presupuesto", "local_only": True}).json()
+    body = client.post("/search", json={"q": "presupuesto"}).json()
     titles = [h["document"]["title"] for h in body["hits"]]
     assert titles == [MUNICIPAL_TITLE]
+
+
+def test_local_only_false_includes_reference_material():
+    client = _client(reranker=None)
+    body = client.post("/search", json={"q": "presupuesto", "local_only": False}).json()
+    titles = {h["document"]["title"] for h in body["hits"]}
+    assert STATE_TITLE in titles
+    assert FEDERAL_TITLE in titles

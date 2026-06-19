@@ -115,7 +115,8 @@ def search_get(
     document_type: str | None = None,
     source_id: UUID | None = None,
     local_only: bool = Query(
-        default=False, description="Hide republished state/federal reference material"
+        default=True,
+        description="Hide republished state/federal reference material (default on)",
     ),
     chunk_repo: ChunkRepository = Depends(get_chunk_repository),
     doc_repo: DocumentRepository = Depends(get_document_repository),

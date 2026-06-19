@@ -91,8 +91,11 @@ class SearchRequest(BaseModel):
     document_type: str | None = None
     source_id: UUID | None = None
     # Hide republished state/federal reference material, keeping municipal-own
-    # (and unmarked) documents. See domain.jurisdiction.
-    local_only: bool = False
+    # (and unmarked) documents. Defaults true: this is a municipal product, and
+    # the state budget volumes / federal laws the portal mirrors are noise for
+    # almost every query. Pass false to search the full corpus. See
+    # domain.jurisdiction.
+    local_only: bool = True
 
 
 class ManifestSummary(BaseModel):

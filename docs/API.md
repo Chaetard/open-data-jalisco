@@ -331,7 +331,7 @@ un hit).
 | `municipality` | string | `null` | | Filtra por municipio. |
 | `document_type` | string | `null` | [enum](#documenttype-document_type) | Filtra por tipo. |
 | `source_id` | UUID | `null` | | Filtra por fuente. |
-| `local_only` | bool | `false` | | Oculta material de referencia estatal/federal republicado, deja sólo lo municipal (y sin marcar). Ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
+| `local_only` | bool | `true` | | Oculta material de referencia estatal/federal republicado, deja sólo lo municipal (y sin marcar). **Activo por defecto** — pasa `false` para buscar todo el corpus. Ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
 
@@ -397,11 +397,11 @@ y ~1-3 s/query en CPU. Desactivado (`none`) por defecto: sin coste, comportamien
 
 **2. Filtro de jurisdicción (`local_only`).** El portal municipal republica material de
 referencia *estatal* y *federal* (el presupuesto del Estado de Jalisco, leyes federales),
-todo bajo `municipality="Tala"`. Por eso "presupuesto municipal" devuelve los volúmenes del
+todo bajo `municipality="Tala"`. Por eso "presupuesto municipal" devolvía los volúmenes del
 *Estado* arriba de los del municipio. Cada documento trae un badge `jurisdiction`
-(`municipal`/`state`/`federal`/`unknown`) inferido del título; con `local_only=true` la
-búsqueda oculta `state` y `federal`, dejando lo municipal (y lo no marcado, que nunca se
-oculta por error).
+(`municipal`/`state`/`federal`/`unknown`) inferido del título; **`local_only` está activo por
+defecto** y oculta `state` y `federal`, dejando lo municipal (y lo no marcado, que nunca se
+oculta por error). Pasa `local_only=false` para buscar el corpus completo.
 
 Se combinan: el reranking ordena bien el conjunto, `local_only` garantiza que no se cuele
 referencia de otro nivel de gobierno. El badge `jurisdiction` está siempre presente aunque
@@ -423,12 +423,13 @@ Prefiere `POST` para frontends nuevos.
 | `municipality` | string | `null` | |
 | `document_type` | string | `null` | |
 | `source_id` | UUID | `null` | |
-| `local_only` | bool | `false` | |
+| `local_only` | bool | `true` | |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
 
 ```bash
-curl -s "http://localhost:8000/search?q=presupuesto%20municipal&limit=5&local_only=true" | jq
+# local_only=true por defecto; pasa false para incluir material estatal/federal
+curl -s "http://localhost:8000/search?q=presupuesto%20municipal&limit=5" | jq
 ```
 
 ---

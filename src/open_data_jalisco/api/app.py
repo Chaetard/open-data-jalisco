@@ -1,13 +1,49 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 open-data-jalisco contributors
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .. import __version__
 from ..shared.config import get_settings
-from ..shared.logging import configure_logging
+from ..shared.logging import configure_logging, get_logger
 from .routers import documents, health, manifests, search, source, sources, stats
+
+logger = get_logger(__name__)
+
+
+def _warmup() -> None:
+    """Load the embedder and reranker models at boot, not on the first query.
+
+    Measured cold start on CPU is ~18 s (model weights load lazily on first
+    use); paying it here means the first real user query is warm (~2-3 s) and
+    doesn't trip frontend timeouts. Best-effort: dummy/none providers load
+    nothing, and any failure (e.g. sentence-transformers not installed) is
+    logged without blocking boot.
+    """
+    try:
+        from .deps import get_embedding_provider, get_reranker
+
+        get_embedding_provider().embed_query("warmup")
+        reranker = get_reranker()
+        if reranker is not None:
+            reranker.rerank("warmup", ["warmup"])
+        logger.info("model warmup complete")
+    except Exception:
+        logger.warning("model warmup skipped", exc_info=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Skip warmup under test: every API test injects fakes via
+    # dependency_overrides, and warmup would otherwise load the real models
+    # (bypassing those overrides). In prod there are no overrides → it runs.
+    if not app.dependency_overrides:
+        _warmup()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -21,6 +57,7 @@ def create_app() -> FastAPI:
             "Technical API for the open-data-jalisco platform. Exposes documents, "
             "sources, semantic search and integrity manifests."
         ),
+        lifespan=lifespan,
     )
 
     # CORS for the SPA. The frontend lives on a different origin during dev
