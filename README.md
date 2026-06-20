@@ -6,7 +6,7 @@
 
 **Open Data Jalisco** es una iniciativa ciudadana, técnica, apartidista y open source para recopilar, preservar, organizar, consultar y verificar información pública municipal del estado de Jalisco, México.
 
-El primer piloto territorial es **Tala, Jalisco**.
+Los pilotos territoriales iniciales son **Tala** y **Tequila, Jalisco**.
 
 📜 Manifiesto completo del proyecto: [**docs/MANIFEST.md**](docs/MANIFEST.md)
 
@@ -77,7 +77,7 @@ La relación deseada con autoridades no es de confrontación automática, sino d
 
 ## Alcance actual
 
-- **Territorial**: Tala, Jalisco (piloto). Diseñado para crecer hacia otros municipios del estado.
+- **Territorial**: Tala y Tequila, Jalisco (pilotos). Diseñado para crecer hacia otros municipios del estado.
 - **Documental**: contratos, licitaciones, adjudicaciones, compras y obra pública, reglamentos, actas, presupuestos, leyes de ingresos y egresos, transparencia activa, directorios institucionales, gacetas y portales oficiales municipales.
 
 Nuevas fuentes se incorporan mediante configuración versionada (YAML), no por modificación del código de producción. Esto mantiene la incorporación auditable y replicable.
@@ -96,7 +96,12 @@ Etapa temprana. MVP funcional con:
 - extracción de texto + chunking + embeddings (provider `dummy` por defecto, sin API key);
 - búsqueda híbrida (vectorial + lexical), filtro `local_only` y reranking opcional;
 - títulos legibles inferidos desde contenido (`infer-titles`) para no depender de nombres de archivo;
-- asistente conversacional opcional con citas (`POST /ask`) cuando hay `LLM_API_KEY`;
+- asistente conversacional opcional con citas (`POST /ask`) cuando hay `LLM_API_KEY`, que incluye:
+  - **router de intención** opcional (modelo barato, p.ej. Gemini Flash) que evita el loop caro en saludos o preguntas fuera de alcance;
+  - **panorama del corpus** precargado (municipios, años, tipos) para acotar búsquedas sin asumir cobertura;
+  - **memoria de conversación por sesión** (el cliente reenvía el contexto; nada se guarda en BD) y persistencia en el portal que sobrevive recargas;
+  - **filtros de municipio/año** en la herramienta de búsqueda y recomendación de la **PNT + guía paso a paso** cuando un documento no está en el corpus;
+  - **multi-proveedor** (Google / OpenAI / Groq / OpenRouter / local) vía `LLM_PROVIDER`;
 - manifests de integridad reproducibles;
 - API HTTP, portal web React + Vite y CLI.
 
@@ -171,6 +176,7 @@ El proyecto podrá aceptar donaciones voluntarias para cubrir costos técnicos (
 | 📜 [docs/MANIFEST.md](docs/MANIFEST.md) | Manifiesto completo: propósito, principios, gobernanza, alcance, IA, contribuciones, sostenibilidad. |
 | 🔌 [docs/API.md](docs/API.md) | Referencia completa de la API pública: cada endpoint, parámetros, esquemas, errores y ejemplos curl. |
 | 🖥️ [docs/FRONTEND_GUIDE.md](docs/FRONTEND_GUIDE.md) | Guía de integración frontend: endpoints, ejemplos JSON, flujos de prueba. |
+| 📝 [CHANGELOG.md](CHANGELOG.md) | Registro de cambios versionado (formato Keep a Changelog). |
 | 🧪 `--help` en CLI | Cada comando documenta sus opciones: `uv run open-data-jalisco --help`, `... sapumu --help`, `... discovered --help`. |
 
 ---
