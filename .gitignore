@@ -45,6 +45,11 @@ datasets/manifests/*.json
 # user-specific; only commit reference examples manually.
 datasets/discovered/
 !datasets/discovered/.gitkeep
+# Scan outputs dropped next to source YAMLs (e.g. tequila_candidates_full.json)
+# are regenerable scratch — never commit them.
+datasets/sources/*_candidates*.json
+datasets/sources/*_candidates*.yaml
+datasets/sources/*_candidates*.yml
 
 # Claude Code / agent-specific local settings
 .claude/
