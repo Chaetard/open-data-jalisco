@@ -17,6 +17,13 @@ from ..shared.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ponytail: cap chunks per document. Malformed/scanned PDFs can extract into
+# millions of garbage chars → tens of thousands of chunks, which stalls the
+# embedder (minutes of CPU per doc) and risks OOM. Truncating keeps the doc
+# searchable on its first part instead of blocking the whole batch. ~1500 chunks
+# ≈ a 400-page document — well beyond any legitimate municipal PDF.
+_MAX_CHUNKS_PER_DOC = 1500
+
 
 @dataclass
 class ProcessingResult:
@@ -103,6 +110,15 @@ class ProcessDocumentsUseCase:
             self._doc_repo.update(doc)
             result.no_text += 1
             return
+
+        if len(candidates) > _MAX_CHUNKS_PER_DOC:
+            logger.warning(
+                "processing.chunks_capped document_id=%s produced=%d cap=%d",
+                doc.id,
+                len(candidates),
+                _MAX_CHUNKS_PER_DOC,
+            )
+            candidates = candidates[:_MAX_CHUNKS_PER_DOC]
 
         self._chunk_repo.delete_for_document(doc.id)
         embed_inputs = [_compose_embedding_input(doc, c) for c in candidates]
