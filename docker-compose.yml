@@ -53,6 +53,11 @@ services:
       - ./datasets:/app/datasets
     expose:
       - "8000"
+    # Publica el API en localhost:8000 (solo loopback) para el dev server de
+    # Vite (`npm run dev`), cuyo proxy /api apunta ahí. En prod el front se sirve
+    # vía Caddy; esto es solo conveniencia de desarrollo, no expone a la red.
+    ports:
+      - "127.0.0.1:8000:8000"
 
   web:
     build: ./web
