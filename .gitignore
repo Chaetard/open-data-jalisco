@@ -51,6 +51,11 @@ datasets/sources/*_candidates*.json
 datasets/sources/*_candidates*.yaml
 datasets/sources/*_candidates*.yml
 
+# High-res media masters kept locally for re-encoding; commit only the
+# web-optimized derivative (e.g. video_hero.mp4), never the *.master.* original.
+*.master.mp4
+*.master.mov
+
 # Claude Code / agent-specific local settings
 .claude/
 
