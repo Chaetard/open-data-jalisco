@@ -1,19 +1,20 @@
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&display=swap");
 @import "tailwindcss";
 
 /* ── Sistema de diseño (tokens) ──────────────────────────────────────────────
    Definidos como theme de Tailwind v4: cada token genera utilidades
    (bg-paper, text-ink, border-line, font-display, rounded-card, …). */
 @theme {
-  --color-paper: #faf9f5;
-  --color-surface: #ffffff;
-  --color-ink: #15201a;
+  --color-paper: #f7f7f2;
+  --color-surface: #fbfbf7;
+  --color-ink: #17231d;
   --color-muted: #6a756d;
   --color-faint: #939c93;
-  --color-line: #e7e8df;
-  --color-line-strong: #d8dccf;
+  --color-line: #d7ded5;
+  --color-line-strong: #b9c8bd;
 
-  --color-brand: #1f5b43;
-  --color-brand-strong: #15201a;
+  --color-brand: #008a4a;
+  --color-brand-strong: #22684b;
   --color-brand-soft: #e9f1ec;
 
   --color-warn-soft: #fbf1da;
@@ -23,10 +24,111 @@
 
   --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype",
     "Book Antiqua", Palatino, Georgia, serif;
+  --font-logo: Montserrat, Inter, ui-sans-serif, system-ui, sans-serif;
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
 
   --radius-card: 14px;
+}
+
+.odj-logo {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.odj-logo-mark {
+  display: inline-block;
+  color: #008a4a;
+  font-family: var(--font-logo);
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.odj-logo-mark-hero {
+  color: #b8efd5;
+}
+
+.odj-logo-mark-footer {
+  font-size: 1rem;
+}
+
+.odj-logo-name {
+  font-family: var(--font-logo);
+  font-size: 0.96rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.05;
+}
+
+.pnt-nav-glow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-bottom-color: transparent !important;
+  border-radius: 999px;
+  margin-inline: -0.35rem;
+  padding-inline: 0.65rem;
+  background: color-mix(in srgb, var(--color-brand) 14%, white);
+  color: var(--color-brand-strong) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-brand) 42%, transparent),
+    0 0 0 6px color-mix(in srgb, var(--color-brand) 14%, transparent),
+    0 12px 26px rgba(0, 138, 74, 0.2);
+  filter: drop-shadow(0 0 12px rgba(0, 138, 74, 0.58));
+  text-shadow: 0 0 18px rgba(0, 138, 74, 0.45);
+  animation: pnt-nav-pop 1.18s ease-in-out 10;
+}
+
+.text-white .pnt-nav-glow {
+  background: rgba(184, 239, 213, 0.18);
+  color: #e9fff2 !important;
+  box-shadow:
+    0 0 0 1px rgba(184, 239, 213, 0.72),
+    0 0 0 6px rgba(184, 239, 213, 0.16),
+    0 12px 28px rgba(184, 239, 213, 0.2);
+  filter: drop-shadow(0 0 14px rgba(184, 239, 213, 0.76));
+  text-shadow: 0 0 18px rgba(184, 239, 213, 0.7);
+}
+
+.pnt-nav-glow::before {
+  content: "";
+  position: absolute;
+  inset: -0.45rem -0.55rem;
+  border: 2px solid color-mix(in srgb, var(--color-brand) 58%, transparent);
+  border-radius: 999px;
+  pointer-events: none;
+  animation: pnt-nav-ring 1.18s ease-out 10;
+}
+
+.text-white .pnt-nav-glow::before {
+  border-color: rgba(184, 239, 213, 0.72);
+}
+
+@keyframes pnt-nav-pop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 0 8px rgba(0, 138, 74, 0.42));
+  }
+  50% {
+    transform: translateY(-1px) scale(1.08);
+    filter: drop-shadow(0 0 20px rgba(0, 138, 74, 0.9));
+  }
+}
+
+@keyframes pnt-nav-ring {
+  0% {
+    opacity: 0.95;
+    transform: scale(0.86);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.42);
+  }
 }
 
 :root {
@@ -63,7 +165,7 @@ html {
   border: 3px solid #101814;
   border-radius: 999px;
   background:
-    linear-gradient(180deg, #b8efd5 0%, #60776b 42%, #1f5b43 100%);
+    linear-gradient(180deg, #b8efd5 0%, #60776b 42%, #22684b 100%);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -183,6 +285,12 @@ button {
     scroll-behavior: auto;
   }
   .skeleton::after {
+    animation: none;
+  }
+  .pnt-nav-glow {
+    animation: none;
+  }
+  .pnt-nav-glow::before {
     animation: none;
   }
 }

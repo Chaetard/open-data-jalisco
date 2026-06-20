@@ -54,12 +54,22 @@ class Settings(BaseSettings):
     root_path: str = ""
 
     # Optional answering agent. Speaks the OpenAI Chat Completions API, so it
-    # works with any OpenAI-compatible provider (Gemini via its compat endpoint,
-    # OpenAI, Groq, a local server…) — the deployer picks the model. Empty
-    # llm_api_key = agent disabled (POST /ask returns 503, nothing else changes).
-    llm_api_base: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    # works with any OpenAI-compatible provider — the deployer picks provider +
+    # model + key. Empty llm_api_key = agent disabled (POST /ask returns 503,
+    # nothing else changes).
+    #
+    # `llm_provider` selects the default endpoint; for anything not listed (a
+    # local server, another host) use "custom" and set `llm_api_base`. An
+    # explicit `llm_api_base` always wins over the provider preset.
+    llm_provider: Literal["google", "openai", "groq", "openrouter", "custom"] = "google"
+    llm_api_base: str = ""
     llm_api_key: str = ""
     llm_model: str = "gemini-2.5-pro"
+    # Cheap model that classifies intent (search vs. chit-chat vs. off-topic)
+    # before the expensive ReAct loop, so greetings don't burn a full search.
+    # Empty = router disabled: every question goes straight to search (old
+    # behavior). Uses the same provider/key as llm_model.
+    llm_router_model: str = ""
     llm_max_iters: int = 5
     llm_timeout_seconds: int = 60
     llm_temperature: float = 0.2

@@ -5,20 +5,25 @@ import {
   ArrowUpRight,
   Database,
   FileText,
+  Info,
   Link2,
+  MapPin,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   PowerOff,
   RotateCcw,
+  Search,
   Sparkles,
   Square,
 } from "lucide-react";
 import { Marked } from "marked";
-import { api, ApiError, AskResponse, AskSource } from "./api";
+import { api, ApiError, AskMode, AskResponse, AskSource, Source } from "./api";
 
 type Turn = {
   id: number;
   question: string;
+  mode: AskMode;
   status: "thinking" | "done" | "error";
   answer?: string;
   model?: string;
@@ -37,10 +42,10 @@ type ResourceItem = {
   count: number;
 };
 
-const suggestions = [
+const suggestedQuestions = [
   "¿Qué requisitos piden para una licencia de construcción?",
-  "¿Cómo está distribuido el presupuesto de egresos 2025?",
-  "¿Qué dice el reglamento sobre el comité de transparencia?",
+  "¿Qué documentos hablan de obras públicas recientes?",
+  "¿Qué reglas aplican para transparencia y acceso a información?",
 ];
 
 const thinkingMessages = [
@@ -55,6 +60,11 @@ const jurisdictionLabel: Record<string, string> = {
   state: "Estatal",
   federal: "Federal",
   unknown: "—",
+};
+
+const modeLabel: Record<AskMode, string> = {
+  ciudadano: "Ciudadano",
+  investigador: "Técnico",
 };
 
 const htmlEscapeMap: Record<string, string> = {
@@ -106,6 +116,14 @@ const renderMarkdown = (markdown: string) => {
   }
 };
 
+const pntMentionPattern =
+  /\bPNT\b|Plataforma Nacional de Transparencia|Panel Nacional de Transparencia/i;
+
+const notifyPntMention = (text: string) => {
+  if (typeof window === "undefined" || !pntMentionPattern.test(text)) return;
+  window.dispatchEvent(new Event("odj:pnt-mentioned"));
+};
+
 const sourcePageLabel = (source: AskSource) => {
   if (source.page_start == null) return null;
   if (source.page_end != null && source.page_end !== source.page_start) {
@@ -114,7 +132,9 @@ const sourcePageLabel = (source: AskSource) => {
   return `pág. ${source.page_start}`;
 };
 
-const sourceKey = (source: AskSource) => source.url.trim().toLowerCase() || `${source.title ?? "sin-titulo"}`;
+const sourceTitle = (source: AskSource) => source.inferred_title || source.title || "Documento sin título";
+
+const sourceKey = (source: AskSource) => source.url.trim().toLowerCase() || sourceTitle(source);
 
 const compactList = (items: string[], visible = 2) => {
   if (items.length <= visible) return items.join(", ");
@@ -136,7 +156,7 @@ const collectResources = (turns: Turn[]) => {
       if (!current) {
         resources.set(key, {
           key,
-          title: source.title,
+          title: sourceTitle(source),
           url: source.url,
           jurisdiction: source.jurisdiction,
           pages: page ? [page] : [],
@@ -147,7 +167,7 @@ const collectResources = (turns: Turn[]) => {
       }
 
       current.count += 1;
-      if (!current.title && source.title) current.title = source.title;
+      if (!current.title) current.title = sourceTitle(source);
       if (page && !current.pages.includes(page)) current.pages.push(page);
       if (!current.turnNumbers.includes(turnNumber)) current.turnNumbers.push(turnNumber);
     });
@@ -163,13 +183,17 @@ const REDUCED =
 const asAskError = (error: unknown) => {
   if (error instanceof ApiError) {
     if (error.status === 0) return "La consulta tardó demasiado o se perdió la conexión.";
+    if (error.status === 502) return "El modelo tuvo un problema. Intenta de nuevo.";
+    if (error.status === 503) return "Asistente no disponible.";
     return error.fieldErrors?.length ? error.fieldErrors.join(" ") : error.message;
   }
   return "El asistente tuvo un problema. Intenta de nuevo.";
 };
 
 const isAssistantMockEnabled = () => {
-  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  if (typeof window === "undefined") return false;
+  const localHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  if (!import.meta.env.DEV && !localHost) return false;
   const search = new URLSearchParams(window.location.search);
   const hashQuery = window.location.hash.includes("?")
     ? new URLSearchParams(window.location.hash.slice(window.location.hash.indexOf("?") + 1))
@@ -196,30 +220,100 @@ const waitForMock = (signal: AbortSignal) =>
 
 const mockSources: AskSource[] = [
   {
+    inferred_title: "Reglamento municipal de prueba",
     title: "Reglamento municipal de prueba",
     url: "https://example.com/reglamento-municipal.pdf",
     page_start: 12,
     page_end: 14,
     jurisdiction: "municipal",
+    excerpt: "Participa en sesiones ordinarias y extraordinarias con voz y voto.",
   },
   {
+    inferred_title: "Acta de comisión de prueba",
     title: "Acta de comision de prueba",
     url: "https://example.com/acta-comision.pdf",
     page_start: 3,
     page_end: null,
     jurisdiction: "municipal",
+    excerpt: "Coordina la recepción, turnado y respuesta de solicitudes.",
   },
 ];
 
-const mockAsk = async (question: string, signal: AbortSignal): Promise<AskResponse> => {
+const mockMunicipalSources: Source[] = [
+  {
+    id: "mock-tala",
+    slug: "tala",
+    name: "Portal municipal de Tala",
+    kind: "municipal_portal",
+    municipality: "Tala",
+    official_url: "https://example.com/tala",
+    description: null,
+    is_active: true,
+  },
+  {
+    id: "mock-tequila",
+    slug: "tequila",
+    name: "Portal municipal de Tequila",
+    kind: "municipal_portal",
+    municipality: "Tequila",
+    official_url: "https://example.com/tequila",
+    description: null,
+    is_active: true,
+  },
+  {
+    id: "mock-zapopan",
+    slug: "zapopan",
+    name: "Portal municipal de Zapopan",
+    kind: "municipal_portal",
+    municipality: "Zapopan",
+    official_url: "https://example.com/zapopan",
+    description: null,
+    is_active: true,
+  },
+  {
+    id: "mock-guadalajara",
+    slug: "guadalajara",
+    name: "Portal municipal de Guadalajara",
+    kind: "municipal_portal",
+    municipality: "Guadalajara",
+    official_url: "https://example.com/guadalajara",
+    description: null,
+    is_active: true,
+  },
+  {
+    id: "mock-tonala",
+    slug: "tonala",
+    name: "Portal municipal de Tonala",
+    kind: "municipal_portal",
+    municipality: "Tonala",
+    official_url: "https://example.com/tonala",
+    description: null,
+    is_active: true,
+  },
+  {
+    id: "mock-tlajomulco",
+    slug: "tlajomulco",
+    name: "Portal municipal de Tlajomulco",
+    kind: "municipal_portal",
+    municipality: "Tlajomulco",
+    official_url: "https://example.com/tlajomulco",
+    description: null,
+    is_active: true,
+  },
+];
+
+const mockAsk = async (question: string, mode: AskMode, signal: AbortSignal): Promise<AskResponse> => {
   await waitForMock(signal);
   return {
     model: "mock-dev",
     iterations: 1,
+    mode,
     sources: mockSources,
     answer: `Respuesta mock para probar el render sin gastar agente real.
 
 Pregunta recibida: **${question}**
+
+**Prueba PNT:** si el documento no aparece en ODJ, recomienda abrir la Plataforma Nacional de Transparencia (PNT) con una solicitud clara y acotada. Esta frase existe para probar el brillo del botón PNT sin gastar tokens del agente real.
 
 Esta respuesta incluye texto largo, listas, citas y una tabla ancha para revisar que el layout no se apachurre y que el scroll horizontal funcione bien.
 
@@ -235,24 +329,132 @@ Esta respuesta incluye texto largo, listas, citas y una tabla ancha para revisar
   };
 };
 
+// Persistencia por sesión (sobrevive recargas, se borra al cerrar la pestaña —
+// que es justo el alcance de "sesión"). No hay backend: el contexto que ve el
+// agente se deriva de estos `turns` al enviar el historial.
+const CHAT_STORAGE_KEY = "odj.chat";
+// El agente sólo usa los últimos turnos; recortar acota el tamaño en storage.
+const MAX_PERSISTED_TURNS = 30;
+
+const loadTurns = (): Turn[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Un turno "thinking" restaurado ya no tiene petición viva detrás (el
+    // AbortController murió con la página): márcalo como error para que la UI no
+    // se quede con el spinner eterno.
+    return (parsed as Turn[]).map((t) =>
+      t.status === "thinking"
+        ? { ...t, status: "error", error: "Se interrumpió al recargar. Reintenta." }
+        : t,
+    );
+  } catch {
+    return [];
+  }
+};
+
+const saveTurns = (turns: Turn[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify(turns.slice(-MAX_PERSISTED_TURNS)),
+    );
+  } catch {
+    // Cuota o serialización: nunca debe tumbar el chat.
+  }
+};
+
 export default function Assistant() {
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(loadTurns);
   const [input, setInput] = useState("");
   const [inputError, setInputError] = useState("");
+  const [mode, setMode] = useState<AskMode>("ciudadano");
+  const [modeHelpOpen, setModeHelpOpen] = useState(false);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [pendingSuggestion, setPendingSuggestion] = useState("");
+  const [municipalityFilter, setMunicipalityFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [agentAvailable, setAgentAvailable] = useState(true);
   const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const resources = useMemo(() => collectResources(turns), [turns]);
   const mockMode = useMemo(() => isAssistantMockEnabled(), []);
+  const municipalities = useMemo(
+    () =>
+      Array.from(new Set(sources.map((source) => source.municipality.trim()).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, "es-MX"),
+      ),
+    [sources],
+  );
 
-  const idRef = useRef(0);
+  // Restored turns carry ids; start the counter past them so new turns don't collide.
+  const idRef = useRef(turns.reduce((max, t) => Math.max(max, t.id), 0));
   const controllerRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // Latest turns, readable inside runAsk (a useCallback that must not depend on
+  // `turns`). Lets every ask — including retries — replay prior Q→A for context.
+  const turnsRef = useRef<Turn[]>(turns);
 
   useEffect(() => {
+    turnsRef.current = turns;
+    saveTurns(turns);
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns]);
+
+  const clearChat = useCallback(() => {
+    controllerRef.current?.abort();
+    setTurns([]);
+    idRef.current = 0;
+    setLoading(false);
+    setInputError("");
+    setClearConfirmOpen(false);
+    try {
+      window.sessionStorage.removeItem(CHAT_STORAGE_KEY);
+    } catch {
+      // ignore: clearing UI state is what matters
+    }
+  }, []);
+
+  const requestClearChat = useCallback(() => {
+    setClearConfirmOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!clearConfirmOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setClearConfirmOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [clearConfirmOpen]);
+
+  useEffect(() => {
+    if (mockMode) {
+      setSources(mockMunicipalSources);
+      return;
+    }
+
+    const controller = new AbortController();
+    api.sources
+      .list({ signal: controller.signal })
+      .then(setSources)
+      .catch(() => {
+        if (!controller.signal.aborted) setSources([]);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "ciudadano") {
+      setPendingSuggestion("");
+      setMunicipalityFilter("");
+    }
+  }, [mode]);
 
   const resetInputHeight = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -260,15 +462,22 @@ export default function Assistant() {
     });
   }, []);
 
-  const runAsk = useCallback(async (id: number, question: string) => {
-    setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, status: "thinking", error: undefined } : t)));
+  const runAsk = useCallback(async (id: number, question: string, askMode: AskMode) => {
+    setTurns((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, mode: askMode, status: "thinking", error: undefined } : t)),
+    );
     const controller = new AbortController();
     controllerRef.current = controller;
     setLoading(true);
     try {
+      const history = turnsRef.current
+        .filter((t) => t.id !== id && t.status === "done" && t.answer)
+        .slice(-3)
+        .map((t) => ({ question: t.question, answer: t.answer as string }));
       const res: AskResponse = mockMode
-        ? await mockAsk(question, controller.signal)
-        : await api.agent.ask(question, { signal: controller.signal });
+        ? await mockAsk(question, askMode, controller.signal)
+        : await api.agent.ask(question, askMode, history, { signal: controller.signal });
+      notifyPntMention(res.answer);
       setTurns((prev) =>
         prev.map((t) =>
           t.id === id
@@ -276,6 +485,7 @@ export default function Assistant() {
                 ...t,
                 status: "done",
                 answer: res.answer,
+                mode: res.mode ?? askMode,
                 model: res.model,
                 iterations: res.iterations,
                 sources: res.sources,
@@ -307,7 +517,7 @@ export default function Assistant() {
   }, [mockMode]);
 
   const submit = useCallback(
-    (raw: string) => {
+    (raw: string, askMode: AskMode = mode) => {
       if (loading) return;
       const question = raw.trim();
       if (question.length < 3) {
@@ -317,26 +527,65 @@ export default function Assistant() {
       setInputError("");
       setInput("");
       resetInputHeight();
+      const scopedQuestion =
+        askMode === "ciudadano" && municipalityFilter
+          ? `Para ${municipalityFilter}: ${question}`
+          : question;
       const id = (idRef.current += 1);
-      setTurns((prev) => [...prev, { id, question, status: "thinking" }]);
-      void runAsk(id, question);
+      setTurns((prev) => [...prev, { id, question: scopedQuestion, mode: askMode, status: "thinking" }]);
+      void runAsk(id, scopedQuestion, askMode);
     },
-    [loading, resetInputHeight, runAsk],
+    [loading, mode, municipalityFilter, resetInputHeight, runAsk],
+  );
+
+  const submitSuggestion = useCallback(
+    (question: string, municipality?: string) => {
+      const scopedQuestion = municipality ? `Para ${municipality}: ${question}` : question;
+      setPendingSuggestion("");
+      submit(scopedQuestion, "ciudadano");
+    },
+    [submit],
+  );
+
+  const askTechnicalVersion = useCallback(
+    (question: string) => {
+      if (loading) return;
+      const id = (idRef.current += 1);
+      setTurns((prev) => [...prev, { id, question, mode: "investigador", status: "thinking" }]);
+      void runAsk(id, question, "investigador");
+    },
+    [loading, runAsk],
   );
 
   const stop = () => controllerRef.current?.abort();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="tech-grid min-h-0 flex-1 overflow-y-auto pb-44">
+      <div className="tech-grid min-h-0 flex-1 overflow-y-auto pb-64">
         <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
           {turns.length === 0 ? (
-            <Intro onPick={submit} />
+            <Intro
+              mode={mode}
+              municipalities={municipalities}
+              pendingSuggestion={pendingSuggestion}
+              onPickSuggestion={setPendingSuggestion}
+              onCancelSuggestion={() => setPendingSuggestion("")}
+              onSubmitSuggestion={submitSuggestion}
+              disabled={loading}
+            />
           ) : (
-            <div className="space-y-10">
-              {turns.map((turn) => (
-                <TurnBlock key={turn.id} turn={turn} onRetry={() => runAsk(turn.id, turn.question)} disabled={loading} />
-              ))}
+            <div className="space-y-6">
+              <div className="space-y-10">
+                {turns.map((turn) => (
+                  <TurnBlock
+                    key={turn.id}
+                    turn={turn}
+                    onRetry={() => runAsk(turn.id, turn.question, turn.mode)}
+                    onTechnical={() => askTechnicalVersion(turn.question)}
+                    disabled={loading}
+                  />
+                ))}
+              </div>
             </div>
           )}
           <div ref={bottomRef} />
@@ -347,6 +596,15 @@ export default function Assistant() {
         loading={loading}
         open={resourcesOpen}
         onToggle={() => setResourcesOpen((open) => !open)}
+        onClearChat={requestClearChat}
+        canClearChat={turns.length > 0 || loading}
+      />
+
+      <ClearChatDialog
+        open={clearConfirmOpen}
+        loading={loading}
+        onCancel={() => setClearConfirmOpen(false)}
+        onConfirm={clearChat}
       />
 
       <div className="assistant-composer-dock pointer-events-none fixed inset-x-0 bottom-0 z-40 pb-4">
@@ -355,7 +613,23 @@ export default function Assistant() {
             <Unavailable onRetry={() => setAgentAvailable(true)} />
           ) : (
             <>
-              <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-line-strong bg-surface/95 p-2 shadow-[0_18px_45px_rgba(21,32,26,0.16)] backdrop-blur focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
+              <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-line-strong bg-surface/95 p-2 shadow-[0_18px_45px_rgba(21,32,26,0.16)] backdrop-blur focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
+                <ModeSwitch
+                  mode={mode}
+                  onChange={setMode}
+                  disabled={loading}
+                  helpOpen={modeHelpOpen}
+                  onHelpToggle={() => setModeHelpOpen((open) => !open)}
+                  onHelpClose={() => setModeHelpOpen(false)}
+                />
+                {mode === "ciudadano" ? (
+                  <ComposerMunicipalityFilter
+                    value={municipalityFilter}
+                    municipalities={municipalities}
+                    onChange={setMunicipalityFilter}
+                    disabled={loading}
+                  />
+                ) : null}
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -373,7 +647,7 @@ export default function Assistant() {
                   }}
                   rows={1}
                   placeholder="Pregunta sobre trámites, presupuestos, reglamentos…"
-                  className="max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-5 outline-none placeholder:text-faint"
+                  className="h-10 max-h-40 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm leading-5 outline-none placeholder:text-faint"
                 />
                 {loading ? (
                   <button
@@ -412,42 +686,273 @@ export default function Assistant() {
   );
 }
 
-function Intro({ onPick }: { onPick: (question: string) => void }) {
+function Intro({
+  mode,
+  municipalities,
+  pendingSuggestion,
+  onPickSuggestion,
+  onCancelSuggestion,
+  onSubmitSuggestion,
+  disabled,
+}: {
+  mode: AskMode;
+  municipalities: string[];
+  pendingSuggestion: string;
+  onPickSuggestion: (question: string) => void;
+  onCancelSuggestion: () => void;
+  onSubmitSuggestion: (question: string, municipality?: string) => void;
+  disabled: boolean;
+}) {
   return (
-    <div className="mx-auto max-w-xl py-10 text-center">
-      <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-brand-strong text-white">
-        <Sparkles className="h-6 w-6" />
-      </span>
-      <h1 className="mt-5 font-display text-3xl font-medium tracking-tight sm:text-4xl">
+    <div className="mx-auto flex min-h-[46vh] max-w-3xl flex-col items-center justify-center py-12 text-center sm:py-16">
+      <h1 className="font-display text-4xl font-medium leading-tight tracking-tight sm:text-5xl">
         Pregúntale a los documentos
       </h1>
-      <p className="mx-auto mt-3 max-w-md text-[15px] leading-7 text-muted">
-        El asistente lee los documentos públicos por ti, redacta una respuesta en español y la
-        respalda con las fuentes oficiales que citó.
-      </p>
-      <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
-        agente · recuperación sobre documentos públicos
+      <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-muted sm:text-[17px]">
+        Consulta trámites, reglamentos, presupuestos, actas y contratos en lenguaje natural. El
+        asistente busca en documentos públicos, resume lo relevante y muestra las fuentes oficiales
+        que respaldan la respuesta.
       </p>
 
-      <div className="mt-8 space-y-2 text-left">
-        {suggestions.map((question) => (
-          <button
-            key={question}
-            type="button"
-            onClick={() => onPick(question)}
-            className="group flex w-full items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left text-sm transition hover:-translate-y-0.5 hover:border-line-strong"
-          >
-            <Sparkles className="h-4 w-4 shrink-0 text-brand" />
-            <span className="flex-1">{question}</span>
-            <ArrowUp className="h-4 w-4 shrink-0 rotate-45 text-faint transition group-hover:text-brand" />
-          </button>
-        ))}
+      {mode === "ciudadano" ? (
+        <div className="mt-8 w-full max-w-3xl text-left">
+          {pendingSuggestion ? (
+            <MunicipalityMenu
+              question={pendingSuggestion}
+              municipalities={municipalities}
+              onSubmit={onSubmitSuggestion}
+              onCancel={onCancelSuggestion}
+            />
+          ) : (
+            <div className="space-y-2">
+              {suggestedQuestions.map((question, index) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => onPickSuggestion(question)}
+                  disabled={disabled}
+                  className="group flex w-full items-start gap-3 rounded-xl border border-line bg-surface/80 px-4 py-3 text-left text-sm leading-5 text-muted transition hover:border-line-strong hover:bg-surface hover:text-ink disabled:opacity-50"
+                >
+                  <span className="mt-0.5 font-mono text-[11px] text-faint transition group-hover:text-brand">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span className="flex-1">{question}</span>
+                  <ArrowUp className="mt-0.5 h-4 w-4 shrink-0 rotate-45 text-faint transition group-hover:text-brand" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MunicipalityMenu({
+  question,
+  municipalities,
+  onSubmit,
+  onCancel,
+}: {
+  question: string;
+  municipalities: string[];
+  onSubmit: (question: string, municipality?: string) => void;
+  onCancel: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [query, setQuery] = useState("");
+  const filteredMunicipalities = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("es-MX");
+    if (!normalized) return municipalities;
+    return municipalities.filter((municipality) =>
+      municipality.toLocaleLowerCase("es-MX").includes(normalized),
+    );
+  }, [municipalities, query]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "center" });
+    });
+  }, []);
+
+  return (
+    <div
+      ref={panelRef}
+      data-assistant-municipality-panel
+      className="overflow-hidden rounded-xl border border-line-strong bg-surface text-left shadow-[0_18px_42px_rgba(21,32,26,0.12)]"
+    >
+      <div className="border-b border-line px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-faint">
+          <MapPin className="h-3.5 w-3.5 text-brand" />
+          Municipio
+        </div>
+        <p className="mt-2 text-sm leading-6 text-ink">{question}</p>
+      </div>
+      <div className="border-b border-line p-2">
+        <label className="relative block">
+          <span className="sr-only">Buscar municipio</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="h-10 w-full rounded-lg border border-line bg-paper pl-9 pr-3 text-sm outline-none transition placeholder:text-faint focus:border-brand focus:bg-surface focus:ring-2 focus:ring-brand/15"
+            placeholder="Buscar municipio"
+          />
+        </label>
+      </div>
+      <div className="max-h-[8.75rem] overflow-y-auto p-2">
+        <button
+          type="button"
+          onClick={() => onSubmit(question)}
+          className="block w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink transition hover:bg-paper"
+        >
+          Todos los municipios
+        </button>
+        <div className="mt-1 grid gap-1 sm:grid-cols-2">
+          {filteredMunicipalities.map((municipality) => (
+            <button
+              key={municipality}
+              type="button"
+              onClick={() => onSubmit(question, municipality)}
+              className="block w-full rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-paper hover:text-ink"
+            >
+              {municipality}
+            </button>
+          ))}
+        </div>
+        {!municipalities.length ? (
+          <p className="px-3 py-2 text-xs leading-5 text-faint">
+            No pude cargar el catálogo de municipios. Puedes preguntar en todos por ahora.
+          </p>
+        ) : null}
+        {municipalities.length && !filteredMunicipalities.length ? (
+          <p className="px-3 py-2 text-xs leading-5 text-faint">Sin municipios con ese texto.</p>
+        ) : null}
+      </div>
+      <div className="border-t border-line px-1.5 py-1.5">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold text-faint transition hover:bg-paper hover:text-ink"
+        >
+          Cancelar
+        </button>
       </div>
     </div>
   );
 }
 
-function TurnBlock({ turn, onRetry, disabled }: { turn: Turn; onRetry: () => void; disabled: boolean }) {
+function ComposerMunicipalityFilter({
+  value,
+  municipalities,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  municipalities: string[];
+  onChange: (value: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <label className="relative hidden h-10 shrink-0 items-center sm:flex">
+      <span className="sr-only">Municipio para investigar</span>
+      <MapPin className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-faint" />
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        className="h-10 max-w-[11rem] appearance-none rounded-lg border border-line-strong bg-paper pl-8 pr-7 text-xs font-semibold text-muted outline-none transition hover:bg-surface focus:border-brand focus:text-ink disabled:opacity-50"
+        title="Municipio para investigar"
+      >
+        <option value="">Todos</option>
+        {municipalities.map((municipality) => (
+          <option key={municipality} value={municipality}>
+            {municipality}
+          </option>
+        ))}
+      </select>
+      <span className="pointer-events-none absolute right-2 text-[10px] text-faint">⌄</span>
+    </label>
+  );
+}
+
+function ModeSwitch({
+  mode,
+  onChange,
+  disabled,
+  helpOpen,
+  onHelpToggle,
+  onHelpClose,
+}: {
+  mode: AskMode;
+  onChange: (mode: AskMode) => void;
+  disabled: boolean;
+  helpOpen: boolean;
+  onHelpToggle: () => void;
+  onHelpClose: () => void;
+}) {
+  return (
+    <div className="relative flex h-10 shrink-0 items-center gap-1">
+      <div className="flex h-9 items-center rounded-lg border border-line-strong bg-paper p-0.5">
+        {(["ciudadano", "investigador"] as AskMode[]).map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(option)}
+            className={`h-8 rounded-md px-2 text-xs font-semibold transition disabled:opacity-50 ${
+              mode === option ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"
+            }`}
+          >
+            {modeLabel[option]}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onHelpToggle}
+        className="grid h-9 w-8 place-items-center rounded-md text-faint transition hover:bg-paper hover:text-ink"
+        aria-label="Info sobre modos"
+        aria-expanded={helpOpen}
+        aria-controls="assistant-mode-help"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {helpOpen ? (
+        <div
+          id="assistant-mode-help"
+          className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-lg border border-line-strong bg-surface p-3 text-xs leading-5 text-muted shadow-[0_14px_35px_rgba(21,32,26,0.16)]"
+        >
+          <button
+            type="button"
+            onClick={onHelpClose}
+            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-md text-faint transition hover:bg-paper hover:text-ink"
+            aria-label="Cerrar info"
+          >
+            ×
+          </button>
+          <p className="pr-6">
+            <strong className="text-ink">Ciudadano</strong>: respuesta breve y simple.
+          </p>
+          <p className="mt-1 pr-6">
+            <strong className="text-ink">Tecnico</strong>: mas detalle, evidencia y trazabilidad.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+function TurnBlock({
+  turn,
+  onRetry,
+  onTechnical,
+  disabled,
+}: {
+  turn: Turn;
+  onRetry: () => void;
+  onTechnical: () => void;
+  disabled: boolean;
+}) {
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3">
@@ -464,7 +969,7 @@ function TurnBlock({ turn, onRetry, disabled }: { turn: Turn; onRetry: () => voi
           {turn.status === "error" ? (
           <ErrorBlock message={turn.error ?? "Error."} onRetry={onRetry} disabled={disabled} />
         ) : (
-          <AnswerBlock turn={turn} />
+          <AnswerBlock turn={turn} onTechnical={onTechnical} disabled={disabled} />
         )}
         </div>
       )}
@@ -503,7 +1008,15 @@ function ThinkingIndicator() {
   );
 }
 
-function AnswerBlock({ turn }: { turn: Turn }) {
+function AnswerBlock({
+  turn,
+  onTechnical,
+  disabled,
+}: {
+  turn: Turn;
+  onTechnical: () => void;
+  disabled: boolean;
+}) {
   const { shown, done } = useTypewriter(turn.answer ?? "");
   const sources = turn.sources ?? [];
   const renderedAnswer = useMemo(() => renderMarkdown(shown), [shown]);
@@ -513,6 +1026,10 @@ function AnswerBlock({ turn }: { turn: Turn }) {
       <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint">
         <Sparkles className="h-3.5 w-3.5 text-brand" />
         <span className="font-mono">Asistente</span>
+        <Sep />
+        <span className="rounded-full border border-line px-2 py-0.5 font-mono">
+          {modeLabel[turn.mode] ?? turn.mode}
+        </span>
         {turn.model ? (
           <>
             <Sep />
@@ -531,6 +1048,17 @@ function AnswerBlock({ turn }: { turn: Turn }) {
 
       <div className="assistant-md" dangerouslySetInnerHTML={{ __html: renderedAnswer }} />
       {!done ? <span className="caret mt-1" aria-hidden /> : null}
+
+      {done && turn.mode === "ciudadano" ? (
+        <button
+          type="button"
+          onClick={onTechnical}
+          disabled={disabled}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-semibold text-muted transition enabled:hover:bg-paper enabled:hover:text-ink disabled:opacity-40"
+        >
+          Ver versión técnica <ArrowUpRight className="h-4 w-4" />
+        </button>
+      ) : null}
 
       {done && sources.length ? (
         <div className="mt-5">
@@ -565,7 +1093,7 @@ function SourceCard({ index, source }: { index: number; source: AskSource }) {
       <span className="mt-0.5 shrink-0 font-mono text-xs text-faint">[{index}]</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold transition group-hover:text-brand">
-          {source.title ?? "Documento sin título"}
+          {sourceTitle(source)}
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] uppercase tracking-wider text-faint">
           <span>{jurisdictionLabel[source.jurisdiction] ?? source.jurisdiction}</span>
@@ -576,6 +1104,11 @@ function SourceCard({ index, source }: { index: number; source: AskSource }) {
             </>
           ) : null}
         </span>
+        {source.excerpt ? (
+          <span className="mt-3 block border-l-2 border-line-strong pl-3 text-xs leading-5 text-muted">
+            “{source.excerpt}”
+          </span>
+        ) : null}
       </span>
       <ArrowUpRight className="h-4 w-4 shrink-0 text-faint transition group-hover:text-brand" />
     </a>
@@ -587,11 +1120,15 @@ function ResourcesPanel({
   loading,
   open,
   onToggle,
+  onClearChat,
+  canClearChat,
 }: {
   resources: ResourceItem[];
   loading: boolean;
   open: boolean;
   onToggle: () => void;
+  onClearChat: () => void;
+  canClearChat: boolean;
 }) {
   return (
     <aside className={`resources-sidebar ${open ? "is-open" : ""}`} aria-label="Recursos encontrados">
@@ -634,8 +1171,85 @@ function ResourcesPanel({
             <p className="mt-2 text-sm text-muted">Sin recursos todavía.</p>
           </div>
         )}
+        {canClearChat ? (
+          <div className="mt-auto border-t border-line pt-3">
+            <button
+              type="button"
+              onClick={onClearChat}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-line-strong bg-paper px-3 text-sm font-semibold text-muted transition hover:border-brand/35 hover:bg-surface hover:text-ink"
+              title="Empezar una conversación nueva"
+            >
+              <Plus className="h-4 w-4" /> Nueva conversación
+            </button>
+          </div>
+        ) : null}
       </div>
     </aside>
+  );
+}
+
+function ClearChatDialog({
+  open,
+  loading,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  loading: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[#101814]/38 px-4 backdrop-blur-sm"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="clear-chat-title"
+        aria-describedby="clear-chat-description"
+        className="w-full max-w-md rounded-card border border-line-strong bg-surface p-5 shadow-[0_24px_70px_rgba(21,32,26,0.24)]"
+      >
+        <div className="flex items-start gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-warn-soft text-warn-ink">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 id="clear-chat-title" className="font-display text-xl font-semibold leading-6">
+              Crear una nueva conversación
+            </h2>
+            <p id="clear-chat-description" className="mt-3 text-sm leading-6 text-muted">
+              Se perderá el chat anterior en esta pestaña, incluyendo preguntas, respuestas,
+              fuentes encontradas y contexto usado para repreguntas.
+              {loading ? " La consulta en curso también se cancelará." : ""}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-line-strong bg-paper px-4 text-sm font-semibold text-muted transition hover:bg-surface hover:text-ink"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex h-10 items-center justify-center rounded-lg bg-danger-ink px-4 text-sm font-semibold text-white transition hover:bg-[#7c281f]"
+          >
+            Sí, borrar chat
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

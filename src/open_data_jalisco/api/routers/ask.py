@@ -19,11 +19,20 @@ from ..deps import get_ask_agent
 router = APIRouter(tags=["agent"])
 
 
+class HistoryTurn(BaseModel):
+    question: str
+    answer: str
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, description="Natural-language question")
     # Answer style. `ciudadano` (default): plain language, action-oriented.
     # `investigador`: full technical traceability (rows/columns, partidas).
     mode: Literal["ciudadano", "investigador"] = "ciudadano"
+    # Prior Q→A pairs from this browser session, sent by the client so follow-ups
+    # keep context. Stateless server: no chats are stored. Only the last few are
+    # replayed (the agent caps them) so payloads stay small.
+    history: list[HistoryTurn] = Field(default_factory=list)
 
 
 class AskSource(BaseModel):
@@ -60,7 +69,11 @@ def ask(
             detail="Agent not configured. Set LLM_API_KEY (and optionally LLM_MODEL).",
         )
     try:
-        result = agent.ask(body.question, mode=body.mode)
+        result = agent.ask(
+            body.question,
+            mode=body.mode,
+            history=[(h.question, h.answer) for h in body.history],
+        )
     except LLMError as e:
         # Upstream model failed - return its reason as a clean 502 instead of a
         # 500 ASGI traceback.

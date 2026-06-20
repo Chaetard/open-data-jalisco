@@ -56,6 +56,31 @@ const routes = [
     priority: "1.0",
     changefreq: "weekly",
   },
+  {
+    path: "/explorador",
+    priority: "0.9",
+    changefreq: "weekly",
+  },
+  {
+    path: "/asistente",
+    priority: "0.8",
+    changefreq: "weekly",
+  },
+  {
+    path: "/pnt",
+    priority: "0.8",
+    changefreq: "monthly",
+  },
+  {
+    path: "/api",
+    priority: "0.7",
+    changefreq: "monthly",
+  },
+  {
+    path: "/comentarios",
+    priority: "0.5",
+    changefreq: "monthly",
+  },
 ];
 
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>

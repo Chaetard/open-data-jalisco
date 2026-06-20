@@ -28,6 +28,15 @@ const documentTypes: Array<{ value: DocumentType | ""; label: string }> = [
 const typeLabel = (value: string) =>
   documentTypes.find((type) => type.value === value)?.label ?? value;
 
+const jurisdictionLabel: Record<string, string> = {
+  municipal: "Municipal",
+  state: "Estatal",
+  federal: "Federal",
+  unknown: "Sin jurisdicción",
+};
+
+const displayTitle = (document: Document) => document.inferred_title || document.title;
+
 const statusLabels: Record<string, string> = {
   pending: "Pendiente",
   extracted: "Extraído",
@@ -38,7 +47,7 @@ const statusLabels: Record<string, string> = {
 };
 
 const statusColor: Record<string, string> = {
-  indexed: "#1f5b43",
+  indexed: "#22684b",
   extracted: "#5f7d92",
   chunked: "#7d6fa6",
   needs_ocr: "#7c581a",
@@ -82,6 +91,7 @@ export default function Explorer() {
   const [sourceFilter, setSourceFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState<DocumentType | "">("");
   const [yearFilter, setYearFilter] = useState("");
+  const [includeNonLocal, setIncludeNonLocal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
@@ -115,7 +125,9 @@ export default function Explorer() {
             limit: 8,
             source_id: sourceFilter || undefined,
             municipality: selectedSource?.municipality,
+            year: yearFilter ? Number(yearFilter) : undefined,
             document_type: typeFilter,
+            local_only: !includeNonLocal,
           },
           { signal },
         );
@@ -128,7 +140,7 @@ export default function Explorer() {
         if (!signal?.aborted) setSearching(false);
       }
     },
-    [query, selectedSource?.municipality, sourceFilter, typeFilter],
+    [includeNonLocal, query, selectedSource?.municipality, sourceFilter, typeFilter, yearFilter],
   );
 
   const refreshDocuments = useCallback(async () => {
@@ -329,6 +341,16 @@ export default function Explorer() {
               <span className="hidden sm:inline">Actualizar</span>
             </button>
           </div>
+
+          <label className="inline-flex min-h-9 items-center gap-2 rounded-lg px-1 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={includeNonLocal}
+              onChange={(event) => setIncludeNonLocal(event.target.checked)}
+              className="h-4 w-4 rounded border-line-strong accent-[#008a4a]"
+            />
+            Incluir leyes estatales/federales
+          </label>
         </form>
       </section>
 
@@ -365,7 +387,7 @@ export default function Explorer() {
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <h2 className="font-display text-[15px] font-semibold leading-6">
-                          {hit.document.title}
+                          {displayTitle(hit.document)}
                         </h2>
                         <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
                           <span>{hit.document.municipality}</span>
@@ -373,6 +395,20 @@ export default function Explorer() {
                           <span>{hit.document.year ?? "s/a"}</span>
                           <Dot />
                           <span>{typeLabel(hit.document.document_type)}</span>
+                          {hit.document.jurisdiction && hit.document.jurisdiction !== "municipal" ? (
+                            <>
+                              <Dot />
+                              <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+                                {jurisdictionLabel[hit.document.jurisdiction] ?? hit.document.jurisdiction}
+                              </span>
+                            </>
+                          ) : null}
+                          {hit.chunk.page_start ? (
+                            <>
+                              <Dot />
+                              <span>pág. {hit.chunk.page_start}</span>
+                            </>
+                          ) : null}
                         </p>
                       </div>
                       <div
@@ -380,12 +416,10 @@ export default function Explorer() {
                         title="Afinidad semántica con tu búsqueda"
                       >
                         <span className="font-display text-xl tabular-nums">
-                          {(hit.score * 100).toFixed(0)}
+                          {((hit.rerank_score ?? hit.score) * 100).toFixed(0)}
                         </span>
                         <span className="text-xs text-faint">%</span>
-                        <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">
-                          afinidad
-                        </p>
+                        <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">relevancia</p>
                       </div>
                     </div>
                     <p className="mt-3 line-clamp-3 text-sm leading-6 text-[#46524a]">{hit.chunk.text}</p>
@@ -395,7 +429,7 @@ export default function Explorer() {
                       rel="noreferrer"
                       className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-brand transition hover:text-ink"
                     >
-                      Abrir fuente oficial <ArrowUpRight className="h-4 w-4" />
+                      Ver documento original <ArrowUpRight className="h-4 w-4" />
                     </a>
                   </article>
                 ))

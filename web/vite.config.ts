@@ -29,6 +29,11 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss(), seoHtmlPlugin(siteUrl)],
     server: {
       port: 5173,
+      // El repo vive en OneDrive y su sync se traga los eventos de archivo, así
+      // que chokidar no se entera de los cambios y el HMR no recompila ("no se
+      // ven los cambios"). El polling los detecta siempre, a costa de algo de
+      // CPU. ponytail: quita esto si mueves el repo fuera de OneDrive.
+      watch: { usePolling: true, interval: 200 },
       proxy: {
         "/api": {
           target: "http://localhost:8000",

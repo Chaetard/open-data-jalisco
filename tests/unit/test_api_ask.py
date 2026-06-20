@@ -19,7 +19,7 @@ def test_ask_returns_503_when_agent_disabled():
 
 
 class _FakeAgent:
-    def ask(self, question: str, *, mode: str = "ciudadano") -> AskResult:
+    def ask(self, question: str, *, mode: str = "ciudadano", history=None) -> AskResult:
         return AskResult(
             answer="Respuesta basada en los documentos.",
             sources=[
@@ -61,7 +61,7 @@ def test_ask_rejects_short_question():
 
 
 class _BoomAgent:
-    def ask(self, question: str, *, mode: str = "ciudadano") -> AskResult:
+    def ask(self, question: str, *, mode: str = "ciudadano", history=None) -> AskResult:
         raise LLMError("LLM upstream 400: invalid value at messages[2].content")
 
 

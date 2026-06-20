@@ -33,6 +33,10 @@ htmlcov/
 .env.local
 .env.*.local
 
+# Override de compose para dev (bind-mount de ./src + uvicorn --reload). Es por
+# máquina y NO debe llegar a prod; cada quien mantiene el suyo en local.
+docker-compose.override.yml
+
 # Local data — NEVER commit raw documents or generated manifests
 data/
 !data/.gitkeep

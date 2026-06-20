@@ -94,9 +94,11 @@ Etapa temprana. MVP funcional con:
 - ingesta controlada desde candidatos con filtros y bloqueo de categorías sensibles (`discovered ingest`);
 - preservación con hash SHA-256 y versionado por URL;
 - extracción de texto + chunking + embeddings (provider `dummy` por defecto, sin API key);
-- búsqueda semántica vía pgvector;
+- búsqueda híbrida (vectorial + lexical), filtro `local_only` y reranking opcional;
+- títulos legibles inferidos desde contenido (`infer-titles`) para no depender de nombres de archivo;
+- asistente conversacional opcional con citas (`POST /ask`) cuando hay `LLM_API_KEY`;
 - manifests de integridad reproducibles;
-- API HTTP + CLI.
+- API HTTP, portal web React + Vite y CLI.
 
 Lo que aún no está expuesto al consumidor: descarga de blobs originales desde la API (se usa el `official_url` de la fuente), autenticación, panel de auditoría visual, OCR.
 
@@ -252,6 +254,8 @@ schema automáticamente.
 | `HTTP_PORT` / `HTTPS_PORT` | Puertos públicos del portal (default 80 / 443). |
 | `LLM_API_KEY` | Activa el agente de respuestas `POST /ask` (opcional; sin ella, el resto funciona igual). |
 | `EMBEDDING_PROVIDER` | `dummy` (default, sin descargas) o `local_st` para búsqueda semántica real. |
+| `RERANK_PROVIDER` | `none` (default) o `cross_encoder` para reordenar resultados con más precisión. |
+| `API_EXTRAS` | Vacío para imagen ligera; usa `local-embed` si activas `local_st` o `cross_encoder` en Docker. |
 
 Comandos equivalentes vía `make up` / `make down` / `make logs`.
 
@@ -309,6 +313,8 @@ Endpoints expuestos:
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/health` | Liveness + versión |
+| GET | `/stats` | Métricas agregadas del corpus |
+| GET | `/source` | Divulgación de código fuente AGPLv3 §13 |
 | GET | `/sources` | Lista de fuentes |
 | GET | `/sources/{slug}` | Detalle de una fuente |
 | GET | `/documents` | Lista filtrable (source_id, municipality, year) |
@@ -318,6 +324,7 @@ Endpoints expuestos:
 | GET | `/search?q=...` | Alias GET para deep-links |
 | POST | `/semantic-search` | Alias explícito de POST /search |
 | GET | `/manifests` | Lista manifests en disco |
+| POST | `/ask` | Agente opcional con respuestas citadas (`LLM_API_KEY`) |
 
 Documentación interactiva en `GET /docs` (Swagger) y `GET /redoc`. Referencia completa de cada endpoint (parámetros, esquemas, errores, ejemplos curl): [**docs/API.md**](docs/API.md). Integración frontend: [**docs/FRONTEND_GUIDE.md**](docs/FRONTEND_GUIDE.md).
 
@@ -350,6 +357,9 @@ uv run open-data-jalisco ingest tala --limit 5
 # Procesar documentos pendientes (extraer texto + chunkear + embeber)
 uv run open-data-jalisco process --limit 50
 
+# Generar títulos legibles desde contenido (requiere LLM_API_KEY)
+uv run open-data-jalisco infer-titles --limit 100
+
 # Generar manifest de integridad (datasets/manifests/<slug>_*.json)
 uv run open-data-jalisco manifest tala
 ```
@@ -379,9 +389,49 @@ Toda la configuración runtime es via `.env` (gestionada por `pydantic-settings`
 | `EMBEDDING_MODEL` | `dummy-v1` — para `local_st`: `intfloat/multilingual-e5-small` |
 | `EMBEDDING_DIMENSION` | `384` |
 | `EMBEDDING_DEVICE` | `cpu` (sólo aplica a `local_st`; usa `cuda` si hay GPU disponible) |
+| `RERANK_PROVIDER` | `none` — alternativa: `cross_encoder` |
+| `RERANK_MODEL` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` |
+| `RERANK_POOL` | `50` candidatos antes de rerank/filter |
+| `ROOT_PATH` | vacío en dev directo; `/api` detrás de Caddy |
+| `LLM_PROVIDER` | `google` — preset del endpoint OpenAI-compatible |
+| `LLM_API_BASE` / `LLM_MODEL` | endpoint OpenAI-compatible y modelo del asistente/títulos |
+| `LLM_API_KEY` | vacío = asistente y `infer-titles` deshabilitados |
+| `LLM_ROUTER_MODEL` | vacío = sin router; si se fija, clasifica intención antes del loop caro |
+| `LLM_MAX_ITERS` | `5` vueltas máximas de búsqueda/razonamiento del agente |
+| `LLM_TIMEOUT_SECONDS` | `60` segundos por llamada HTTP al proveedor LLM |
+| `LLM_TEMPERATURE` | `0.2` |
+| `CORS_ORIGINS` | origins permitidos para dev cross-origin |
 | `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` |
 
+`.env` se carga desde la raíz del proyecto con `pydantic-settings`; las variables
+del entorno del proceso pueden sobrescribirlo. En Docker Compose, el mismo archivo
+también alimenta variables como `POSTGRES_PASSWORD`, `SITE_ADDRESS` y `API_EXTRAS`.
+No commitees `.env`: usa `.env.example` como plantilla. Después de cambiar `.env`,
+reinicia la API; la configuración se cachea al arrancar y `--reload` no siempre
+relee cambios de variables.
+
 `EMBEDDING_PROVIDER=dummy` produce vectores determinísticos desde el hash del texto — sin API keys, sin red, **sin semántica real**. Útil para tests, inútil para búsqueda. Para una demo funcional usa `local_st` (siguiente sección).
+
+`RERANK_PROVIDER=cross_encoder` reordena el top-N recuperado por búsqueda híbrida. Mejora consultas ciudadanas contra textos administrativos, pero carga un modelo local; instala `uv sync --extra local-embed` o usa `API_EXTRAS=local-embed` en Docker.
+
+### Iteraciones y tiempos del asistente
+
+`POST /ask` ejecuta un loop acotado tipo ReAct: el modelo decide si necesita llamar
+a `search_documents`, el backend ejecuta esa búsqueda y el resultado vuelve al
+modelo. Cada vuelta cuenta como una iteración. Si el modelo responde sin pedir más
+búsquedas, el endpoint termina y devuelve `iterations` con las vueltas usadas. Si
+llega a `LLM_MAX_ITERS`, el backend fuerza una respuesta final con la evidencia ya
+consultada y reporta `iterations = LLM_MAX_ITERS`.
+
+Si `LLM_ROUTER_MODEL` está configurado, antes del loop hay una llamada barata que
+clasifica intención. Saludos o preguntas fuera de alcance pueden contestarse con
+`iterations = 0` y sin tocar la búsqueda documental. Para preguntas reales de
+documentos, el router deja pasar al loop normal.
+
+`LLM_TIMEOUT_SECONDS` aplica a cada llamada HTTP al proveedor LLM, no al endpoint
+completo. En el peor caso puede haber hasta `LLM_MAX_ITERS` llamadas con herramientas,
+una llamada final forzada y, opcionalmente, una llamada del router; por eso el
+frontend debe usar un timeout generoso. El portal usa 180 s para `/ask`.
 
 ## Demo local con embedder real
 
@@ -396,6 +446,7 @@ uv sync --extra local-embed
 #    EMBEDDING_MODEL=intfloat/multilingual-e5-small
 #    EMBEDDING_DIMENSION=384
 #    EMBEDDING_DEVICE=cpu
+#    RERANK_PROVIDER=cross_encoder  # opcional
 
 # 3) Si ya habías procesado documentos con `dummy`, sus chunks quedaron con
 #    embeddings determinísticos inservibles. Borralos antes de re-indexar:
@@ -416,15 +467,19 @@ uv run open-data-jalisco search "contrato sapumu"
 uv run open-data-jalisco search "adjudicación directa 2025"
 uv run open-data-jalisco search "ley datos personales"
 
-# 7) Levantar la API para el frontend
+# 7) Si tienes LLM_API_KEY, generar títulos legibles para mejorar la UI
+uv run open-data-jalisco infer-titles --limit 100
+
+# 8) Levantar la API para el frontend
 make api    # uvicorn apps.api.main:app --reload
 ```
 
-El input al embedder antepone el título del documento a cada chunk — así, aunque el cuerpo de un PDF no mencione la entidad buscada (p. ej. "SAPUMU"), si aparece en el título el chunk hace match.
+El input al embedder antepone el título del documento a cada chunk — así, aunque el cuerpo de un PDF no mencione la entidad buscada (p. ej. "SAPUMU"), si aparece en el título el chunk hace match. En la API, usa `inferred_title` para mostrar un nombre humano cuando exista y `jurisdiction`/`local_only` para separar documentos municipales de material estatal o federal republicado.
 
 ## Notas técnicas adicionales
 
 - **Extractores soportados**: PDF (`pypdf`, los escaneados sin capa de texto van a `needs_ocr`), XLSX/XLSM (`openpyxl` read-only, una página por hoja no vacía), HTML (`trafilatura` + `beautifulsoup4`), plaintext/CSV/Markdown vía stdlib.
 - **Inferencia de año/mes**: cuando el YAML no provee `year`, se infiere de URLs con forma `/<...>/YYYY/MM/<...>`. El valor aterriza en `Document.year` y `Document.metadata` (`inferred_month`, `year_inferred_from_url`).
+- **Búsqueda**: `/search` combina recuperación vectorial y lexical, deduplica por `sha256`, acepta `year` y `local_only`, y puede devolver `reranker`/`rerank_score` si activas el cross-encoder.
 - **Scrapers**: `generic_http` cubre portales con `direct_documents` + descubrimiento superficial sobre `seed_urls`; `sapumu_content` cubre portales SAPUMU parseando el JSON embebido en `<level-content :content="...">`. Ambos comparten allow-lists, deduplicación y semántica de `--limit`.
 - **Plantillas en `configs/`**: contienen URLs placeholder. Si una URL conserva fragmentos como `example.invalid`, `REEMPLAZAR` o `<replace>`, la ingesta falla con `PlaceholderUrlError` antes de tocar la red o la DB.

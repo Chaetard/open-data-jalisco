@@ -131,6 +131,8 @@ Errores de validación de parámetros (422) devuelven el formato detallado de Fa
 | `200` | OK. |
 | `404` | Recurso no encontrado (documento/fuente inexistente). |
 | `422` | Parámetro inválido (faltante, fuera de rango, tipo incorrecto). |
+| `502` | Error del proveedor LLM aguas arriba en `POST /ask`. |
+| `503` | Agente deshabilitado porque falta `LLM_API_KEY`. |
 | `500` | Error interno (DB caída, embedder no inicializa, etc.). |
 
 ---
@@ -332,6 +334,7 @@ un hit).
 | `municipality` | string | `null` | | Filtra por municipio. |
 | `document_type` | string | `null` | [enum](#documenttype-document_type) | Filtra por tipo. |
 | `source_id` | UUID | `null` | | Filtra por fuente. |
+| `year` | int | `null` | `1900`–`2100` | Filtra por año del documento. |
 | `local_only` | bool | `true` | | Oculta material de referencia estatal/federal republicado, deja sólo lo municipal (y sin marcar). **Activo por defecto** — pasa `false` para buscar todo el corpus. Ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
@@ -350,9 +353,11 @@ curl -s -X POST http://localhost:8000/search \
   "embedding_provider": "local_st",
   "embedding_model": "intfloat/multilingual-e5-small",
   "embedding_dimension": 384,
+  "reranker": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
   "hits": [
     {
       "score": 0.8721,
+      "rerank_score": 4.31,
       "chunk": {
         "id": "…", "document_id": "…", "chunk_index": 4,
         "text": "Requisitos: 1. Solicitud… 2. Identificación oficial…",
@@ -361,8 +366,10 @@ curl -s -X POST http://localhost:8000/search \
       },
       "document": {
         "id": "…", "title": "Reglamento de construcción municipal",
+        "inferred_title": "Reglamento municipal de construcción",
         "document_type": "regulation", "official_url": "https://…",
-        "processing_status": "indexed", "is_current": true
+        "processing_status": "indexed", "is_current": true,
+        "jurisdiction": "municipal"
       }
     }
   ]
@@ -424,6 +431,7 @@ Prefiere `POST` para frontends nuevos.
 | `municipality` | string | `null` | |
 | `document_type` | string | `null` | |
 | `source_id` | UUID | `null` | |
+| `year` | int | `null` | `1900`–`2100` |
 | `local_only` | bool | `true` | |
 
 **Respuesta `200`** — [`SearchResponse`](#searchresponse)
@@ -478,29 +486,48 @@ Si no, devuelve `503`. El agente habla la API OpenAI Chat Completions, así que 
 operador puede usar **cualquier** proveedor/modelo compatible (Gemini, OpenAI, Groq,
 local…) vía `LLM_API_BASE` / `LLM_MODEL`.
 
+La configuración operativa vive en `.env` del backend:
+
+| Variable | Efecto |
+|---|---|
+| `LLM_API_KEY` | Enciende el agente. Sin valor, `/ask` devuelve `503` y el resto de la API sigue disponible. |
+| `LLM_PROVIDER`, `LLM_API_BASE`, `LLM_MODEL` | Seleccionan proveedor OpenAI-compatible, endpoint y modelo. |
+| `LLM_ROUTER_MODEL` | Opcional. Clasifica saludos/fuera-de-tema antes del loop caro; si responde ahí, `iterations` puede ser `0`. |
+| `LLM_MAX_ITERS` | Máximo de vueltas de razonamiento/búsqueda con `search_documents` antes de forzar respuesta final. Default `5`. |
+| `LLM_TIMEOUT_SECONDS` | Timeout de cada llamada HTTP al proveedor LLM. Default `60`; no es un límite total del endpoint. |
+| `LLM_TEMPERATURE` | Temperatura enviada al proveedor. Default `0.2`. |
+
+Después de editar `.env`, reinicia la API para asegurar que `pydantic-settings` y
+las dependencias cacheadas tomen los nuevos valores.
+
 **Request body**
 
 | Campo | Tipo | Rango | Descripción |
 |---|---|---|---|
 | `question` | string | `≥ 3` chars | Pregunta en lenguaje natural. |
+| `mode` | `ciudadano` \| `investigador` | — | Estilo de respuesta. `ciudadano` (default) prioriza claridad y acciones; `investigador` agrega más detalle técnico y trazabilidad. |
+| `history` | `{ question, answer }[]` | — | Turnos previos que el cliente quiere replayar para contexto. El servidor no persiste conversaciones; si se omite, la pregunta es de un solo turno. |
 
 **Respuesta `200`** — [`AskResponse`](#askresponse)
+**Respuesta `502`** — `{ "detail": "Upstream LLM error: ..." }`
 **Respuesta `503`** — `{ "detail": "Agent not configured. Set LLM_API_KEY..." }`
 
 ```bash
 curl -s -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "¿Qué requisitos piden para una licencia de construcción?"}' | jq
+  -d '{"question": "¿Y en Tequila?", "mode": "ciudadano", "history": [{"question": "¿Qué requisitos piden para una licencia de construcción en Tala?", "answer": "En Tala se encontró…"}]}' | jq
 ```
 
 ```json
 {
   "answer": "Para una licencia de construcción necesitas… (según el Reglamento de construcción municipal).",
   "model": "gemini-2.5-pro",
+  "mode": "ciudadano",
   "iterations": 2,
   "sources": [
     {
       "title": "Reglamento de construcción municipal",
+      "inferred_title": "Reglamento municipal de construcción",
       "url": "https://…",
       "page_start": 12,
       "page_end": 12,
@@ -514,6 +541,11 @@ curl -s -X POST http://localhost:8000/ask \
 > El agente sólo ve el corpus a través de la herramienta de búsqueda y se le
 > instruye a no inventar: si no hay evidencia, lo dice. `iterations` es cuántas
 > vueltas de razonamiento/búsqueda tomó (acotado por `LLM_MAX_ITERS`).
+> Cada iteración puede hacer una llamada al modelo y una o más búsquedas
+> documentales. Si se agota `LLM_MAX_ITERS`, el backend hace una llamada final sin
+> herramientas para obligar una respuesta con lo ya consultado. El timeout
+> `LLM_TIMEOUT_SECONDS` aplica por llamada al proveedor; el cliente debe usar un
+> timeout mayor que una sola llamada (el portal usa 180 s).
 
 ---
 
@@ -631,8 +663,18 @@ Ver [`POST /search`](#post-search).
 |---|---|---|
 | `answer` | string | Respuesta en prosa, citando documentos. |
 | `model` | string | Modelo LLM usado (ej. `gemini-2.5-pro`). |
+| `mode` | string | Estilo aplicado: `ciudadano` o `investigador`. |
 | `iterations` | int | Vueltas de búsqueda/razonamiento que tomó. |
 | `sources` | `AskSource[]` | Documentos consultados (dedup por URL). |
+
+### `AskHistoryTurn`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `question` | string | Pregunta previa enviada por el usuario. |
+| `answer` | string | Respuesta previa mostrada por el asistente. |
+
+El historial es opcional y vive en el cliente. El backend sólo recibe los turnos que el frontend decide enviar y el agente usa los últimos turnos para resolver repreguntas; no hay almacenamiento server-side de chats.
 
 ### `AskSource`
 
@@ -668,7 +710,9 @@ tipados (ej. `openapi-typescript`). Este documento es la versión legible para h
 ### Levantar la API en local
 
 ```bash
-uv run uvicorn open_data_jalisco.api.app:app --reload --port 8000
+make api
+# equivalente literal:
+# uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .
 ```
 
 Requiere PostgreSQL con pgvector y la DB poblada. Para resultados semánticos reales,

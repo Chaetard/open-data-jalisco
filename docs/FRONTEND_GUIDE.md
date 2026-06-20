@@ -17,7 +17,7 @@ No incluye código de implementación: incluye contratos, ejemplos de request/re
 | Content-Type | `application/json; charset=utf-8` (request y response salvo `/health`) |
 | Autenticación | Ninguna actualmente (no hay tokens, no hay cookies) |
 | CORS | **Configurado y env-driven**. Por default acepta `http://localhost:5173` (Vite), `http://localhost:3000` (CRA/Next) y `http://127.0.0.1:5173`. Para prod o un puerto distinto, override `CORS_ORIGINS` en `.env` con una lista separada por comas (ej. `CORS_ORIGINS="https://odj.example.com,http://localhost:5173"`). |
-| Errores | FastAPI devuelve `{ "detail": "<mensaje>" }` con códigos HTTP estándar (404, 422, 500). 422 viene con un array de errores de validación. |
+| Errores | FastAPI devuelve `{ "detail": "<mensaje>" }` con códigos HTTP estándar (404, 422, 500, 502, 503). 422 viene con un array de errores de validación. |
 
 ---
 
@@ -26,6 +26,8 @@ No incluye código de implementación: incluye contratos, ejemplos de request/re
 | Método | Ruta | Propósito |
 |---|---|---|
 | GET | `/health` | Liveness check, versión, environment. |
+| GET | `/stats` | Métricas agregadas del corpus para tarjetas/dashboard. |
+| GET | `/source` | Divulgación de código fuente AGPLv3 §13. |
 | GET | `/sources` | Lista de fuentes (municipios/portales) registradas. |
 | GET | `/sources/{slug}` | Detalle de una fuente por slug. |
 | GET | `/documents` | Lista paginada de documentos con filtros. |
@@ -69,6 +71,7 @@ El backend serializa los enums como strings minúsculas:
 - `SourceKind`: `municipal_portal`, `state_transparency_portal`, `national_transparency_platform`, `gazette`, `other`.
 - `DocumentType`: `contract`, `bidding`, `award`, `regulation`, `minutes`, `budget`, `financial_report`, `other`, `unknown`.
 - `ProcessingStatus`: `pending`, `extracted`, `chunked`, `indexed`, `failed`, `needs_ocr`.
+- `jurisdiction` en documentos/fuentes citadas: `municipal`, `state`, `federal`, `unknown`.
 
 El frontend puede declarar tipos union de string para estos campos y nunca recibirá un valor fuera de esa lista.
 
@@ -125,7 +128,63 @@ GET /health
 
 ---
 
-### 4.2 `GET /sources`
+### 4.2 `GET /stats`
+
+Métricas agregadas para tarjetas de dashboard. Úsalo para totales; no pagines `/documents` sólo para contar.
+
+**Request**
+```
+GET /stats
+```
+
+**Response 200**
+```json
+{
+  "documents_total": 2433,
+  "documents_by_status": [
+    { "status": "indexed", "count": 1513 },
+    { "status": "pending", "count": 908 }
+  ],
+  "chunks_total": 92451,
+  "unique_documents_by_sha256": 740,
+  "sources_total": 1,
+  "documents_by_source": [
+    { "slug": "tala", "count": 2433 }
+  ]
+}
+```
+
+**Uso en frontend**
+- Poblar contadores de portada, dashboard o estado del corpus.
+- Mostrar `documents_by_status` para saber si hay contenido pendiente, fallido o listo para búsqueda.
+
+---
+
+### 4.3 `GET /source`
+
+Divulgación de código fuente para cumplir AGPLv3 §13 cuando el software se opera por red.
+
+**Request**
+```
+GET /source
+```
+
+**Response 200**
+```json
+{
+  "repository": "https://github.com/Chaetard/open-data-jalisco",
+  "license": "AGPL-3.0-or-later",
+  "version": "0.1.0",
+  "commit": null
+}
+```
+
+**Uso en frontend**
+- Enlazar "Código fuente" o "Versión en ejecución" sin hardcodear el commit de deploy.
+
+---
+
+### 4.4 `GET /sources`
 
 Lista las fuentes registradas (cada municipio/portal es una fuente).
 
@@ -165,7 +224,7 @@ GET /sources?include_inactive=true
 
 ---
 
-### 4.3 `GET /sources/{slug}`
+### 4.5 `GET /sources/{slug}`
 
 Detalle de una fuente.
 
@@ -206,7 +265,7 @@ GET /sources/tala
 
 ---
 
-### 4.4 `GET /documents`
+### 4.6 `GET /documents`
 
 Lista paginada con filtros opcionales.
 
@@ -236,9 +295,11 @@ GET /documents?source_id=8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c&year=2025&limit=20
     "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
     "sha256": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
     "title": "Documento SAPUMU Tala 2025-11 2743",
+    "inferred_title": "Acta de sesión ordinaria del Ayuntamiento de Tala",
     "document_type": "other",
     "municipality": "Tala",
     "year": 2025,
+    "jurisdiction": "municipal",
     "official_url": "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/11/2743/VYx464GjY1.pdf",
     "captured_url": "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/11/2743/VYx464GjY1.pdf",
     "captured_at": "2026-05-31T14:22:03.812345+00:00",
@@ -256,6 +317,8 @@ GET /documents?source_id=8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c&year=2025&limit=20
 
 **Notas sobre el modelo**
 - `version` y `is_current` permiten mostrar el historial. Si `is_current=false`, hay una versión más nueva; `superseded_by` apunta al UUID que la reemplazó (si está disponible).
+- `title` viene del nombre de archivo y puede ser críptico; para UI prefiere `inferred_title ?? title ?? "Documento sin título"`.
+- `jurisdiction` permite distinguir documentos municipales de material estatal/federal republicado por portales municipales.
 - `processing_status` te dice si el texto ya fue extraído (`extracted`, `chunked`, `indexed`) o falló (`failed`, `needs_ocr`). Solo `indexed` (o `chunked`) garantiza que `GET /documents/{id}/chunks` devuelva resultados.
 - `storage_path` es relativo al storage del backend — el frontend NO puede usarlo para descargar. Para descarga usa `official_url`.
 
@@ -266,7 +329,7 @@ GET /documents?source_id=8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c&year=2025&limit=20
 
 ---
 
-### 4.5 `GET /documents/{document_id}`
+### 4.7 `GET /documents/{document_id}`
 
 Detalle de un documento.
 
@@ -295,7 +358,7 @@ GET /documents/11111111-2222-3333-4444-555555555555
 
 ---
 
-### 4.6 `GET /documents/{document_id}/chunks`
+### 4.8 `GET /documents/{document_id}/chunks`
 
 Chunks de texto del documento. Útiles para mostrar el cuerpo del documento ya procesado, o para construir el snippet de resultados de búsqueda.
 
@@ -342,7 +405,7 @@ GET /documents/11111111-2222-3333-4444-555555555555/chunks
 
 ---
 
-### 4.7 Búsqueda semántica — `POST /search` (preferido)
+### 4.9 Búsqueda semántica — `POST /search` (preferido)
 
 Búsqueda semántica sobre el texto extraído. Internamente: la query se embeddea y se busca por distancia coseno contra los embeddings de los chunks.
 
@@ -353,8 +416,10 @@ Búsqueda semántica sobre el texto extraído. Internamente: la query se embedde
   "q": "presupuesto de egresos 2025",
   "limit": 10,
   "municipality": "Tala",
+  "year": 2025,
   "document_type": "budget",
-  "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c"
+  "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
+  "local_only": true
 }
 ```
 
@@ -363,8 +428,10 @@ Búsqueda semántica sobre el texto extraído. Internamente: la query se embedde
 | `q` | string | sí | — | Mínimo 2 caracteres. |
 | `limit` | int | no | `10` | 1–50. |
 | `municipality` | string | no | — | Filtro exacto. |
+| `year` | int | no | — | 1900–2100. |
 | `document_type` | string | no | — | Valor de `DocumentType`. |
 | `source_id` | UUID | no | — | Filtra a una fuente. |
+| `local_only` | boolean | no | `true` | Oculta material estatal/federal republicado; usa `false` para buscar todo el corpus. |
 
 **Response 200** — `SearchResponse`:
 
@@ -374,9 +441,11 @@ Búsqueda semántica sobre el texto extraído. Internamente: la query se embedde
   "embedding_provider": "dummy",
   "embedding_model": "dummy-v1",
   "embedding_dimension": 384,
+  "reranker": null,
   "hits": [
     {
       "score": 0.8742,
+      "rerank_score": null,
       "chunk": {
         "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         "document_id": "11111111-2222-3333-4444-555555555555",
@@ -395,10 +464,12 @@ Búsqueda semántica sobre el texto extraído. Internamente: la query se embedde
       "document": {
         "id": "11111111-2222-3333-4444-555555555555",
         "title": "Presupuesto de Egresos 2025",
+        "inferred_title": "Presupuesto de egresos del municipio de Tala 2025",
         "official_url": "https://app-sapumu.../presupuesto-2025.pdf",
         "sha256": "9a8b7c6d5e4f...",
         "municipality": "Tala",
         "year": 2025,
+        "jurisdiction": "municipal",
         "document_type": "budget",
         "processing_status": "indexed"
       }
@@ -413,20 +484,22 @@ Búsqueda semántica sobre el texto extraído. Internamente: la query se embedde
 - Rango: `[0, 1]`. Mayor = más relevante.
 - Calculado como `max(0, 1 - distance_cosine)`. Un 0.0 significa que el match es marginal o que ya saturó el límite.
 - No es un porcentaje de relevancia "humano" — sirve para ordenar, no para mostrar "87% match" en UI a menos que aclares qué significa.
+- Si `reranker` no es `null`, los hits vienen ordenados por `rerank_score`; ese score es un logit comparable sólo dentro de la misma respuesta.
 
 **Comportamiento esperado**
 - Si no hay resultados, `hits` es array vacío `[]` (no 404).
 - Si el `embedding_provider` actual es `"dummy"` (default en local), los resultados serán determinísticos pero no semánticamente útiles — útil sólo para validar la integración.
 - 422 si `q` tiene menos de 2 caracteres.
+- `local_only` viene prendido por defecto para ocultar leyes estatales/federales republicadas por un municipio. Deja pasar documentos `municipal` y `unknown`; no borra resultados por falta de certeza.
 
 **Uso en frontend**
 - Componente search-bar con debounce (≥300ms) que dispara el `POST`.
-- Lista de resultados: por cada hit muestra `document.title`, snippet de `chunk.text` (primeros 240 chars + `…`), `score` y un link al detalle del documento.
-- Filtros opcionales: select de municipio, tipo de documento, source.
+- Lista de resultados: por cada hit muestra `document.inferred_title ?? document.title`, snippet de `chunk.text` (primeros 240 chars + `…`), página si existe, badge `jurisdiction` y un link al documento oficial.
+- Filtros opcionales: municipio, año, tipo de documento, fuente y switch "incluir leyes estatales/federales" (`local_only=false`).
 
 ---
 
-### 4.8 `GET /search` (legacy, equivalente)
+### 4.10 `GET /search` (legacy, equivalente)
 
 Mismo comportamiento que `POST /search` pero con query string. Útil para enlaces compartibles ("URL como estado").
 
@@ -439,13 +512,13 @@ Mismos parámetros que el body del `POST`, mismo response. Preferí `POST` para 
 
 ---
 
-### 4.9 `POST /semantic-search`
+### 4.11 `POST /semantic-search`
 
 Alias explícito de `POST /search`. Mismo body, mismo response. Usar este cuando quieras dejar claro en el código del frontend que la intención es semántica (vs. otros tipos de búsqueda futuros como BM25).
 
 ---
 
-### 4.10 `GET /manifests`
+### 4.12 `GET /manifests`
 
 Lista los manifests de integridad generados por `odj manifest`. Son resúmenes con el conteo de documentos y la versión del pipeline en el momento de generación. Útiles para una pantalla de "auditoría".
 
@@ -512,8 +585,9 @@ Estos son los flujos mínimos para validar que la integración frontend funciona
 ### Flujo 5 — Búsqueda
 1. `POST /search` con `{ "q": "ab" }` (mínimo 2 chars) → confirma 200 (o `[]` en hits si no hay nada indexado).
 2. `POST /search` con `{ "q": "a" }` → confirma 422 y muestra error de validación en UI.
-3. `POST /search` con filtros (`municipality`, `document_type`, `source_id`) → confirma que `hits[].document` cumple los filtros.
-4. `GET /search?q=test` → confirma que el equivalente GET responde igual.
+3. `POST /search` con filtros (`municipality`, `year`, `document_type`, `source_id`) → confirma que `hits[].document` cumple los filtros.
+4. `POST /search` con `{ "q": "ley de ingresos", "local_only": false }` → confirma que pueden aparecer documentos `state`/`federal`; con `local_only` omitido deben ocultarse.
+5. `GET /search?q=test` → confirma que el equivalente GET responde igual.
 
 ### Flujo 6 — Manifests
 1. `GET /manifests` → confirma array (puede estar vacío en local recién montado).
@@ -538,11 +612,11 @@ Sin asumir lenguaje, los puntos que debes cubrir en cualquier cliente:
 
 ## 7. Pantallas mínimas sugeridas para validar todo
 
-Para un frontend de pruebas no necesitas diseño — sólo necesitas estas 6 pantallas con las llamadas correctas:
+Para un frontend de pruebas no necesitas diseño — sólo necesitas estas 7 pantallas con las llamadas correctas:
 
 | Pantalla | Endpoints que dispara |
 |---|---|
-| Home / status | `GET /health`, `GET /sources` |
+| Home / status | `GET /health`, `GET /stats`, `GET /source`, `GET /sources` |
 | Lista de fuentes | `GET /sources?include_inactive=...` |
 | Detalle de fuente | `GET /sources/{slug}`, `GET /documents?source_id=...` |
 | Lista de documentos | `GET /documents` con filtros y paginación |
@@ -550,7 +624,7 @@ Para un frontend de pruebas no necesitas diseño — sólo necesitas estas 6 pan
 | Búsqueda | `POST /search` (o `GET /search` con URL state) |
 | Manifests | `GET /manifests` (opcional con `source_slug`) |
 
-Con esas 6 pantallas tocas el 100% de los endpoints expuestos hoy y puedes detectar regresiones de contrato apenas el backend cambie un campo.
+Con esas pantallas tocas el 100% de los endpoints expuestos hoy y puedes detectar regresiones de contrato apenas el backend cambie un campo.
 
 ---
 
@@ -592,8 +666,9 @@ make api
 # equivalente literal:
 # uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .
 
-# Terminal 2 — frontend Vite (puerto 5173 por default)
-cd <tu-carpeta-de-front>
+# Terminal 2 — frontend Vite del repo (puerto 5173 por default)
+cd web
+npm ci
 npm run dev
 ```
 
@@ -604,9 +679,11 @@ curl http://localhost:8000/health
 # → {"status":"ok","version":"0.1.0","environment":"local"}
 ```
 
-### 10.2 Variable de entorno en Vite
+### 10.2 Base URL en Vite
 
-En la raíz del front, `.env.development`:
+El SPA de este repo llama a la API por ruta relativa `/api`; `web/vite.config.ts` proxyea ese prefijo a `http://localhost:8000` en desarrollo, y Caddy hace lo mismo en producción. No necesitas configurar una URL del backend para este frontend.
+
+Si estás haciendo un frontend externo, entonces sí conviene usar una variable:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8000
@@ -632,6 +709,8 @@ export type DocumentType =
   | "contract" | "bidding" | "award" | "regulation" | "minutes"
   | "budget" | "financial_report" | "other" | "unknown";
 
+export type Jurisdiction = "municipal" | "state" | "federal" | "unknown";
+
 export interface SourceOut {
   id: string;
   slug: string;
@@ -648,9 +727,11 @@ export interface DocumentOut {
   source_id: string;
   sha256: string;
   title: string | null;
+  inferred_title: string | null;
   document_type: DocumentType;
   municipality: string;
   year: number | null;
+  jurisdiction: Jurisdiction;
   official_url: string;
   captured_url: string | null;
   captured_at: string;           // ISO-8601 UTC
@@ -682,6 +763,7 @@ export interface ChunkOut {
 
 export interface SearchHit {
   score: number;                 // 0–1, mayor = mejor
+  rerank_score: number | null;   // logit si hay reranker; null si no aplica
   chunk: ChunkOut;
   document: DocumentOut;
 }
@@ -691,6 +773,7 @@ export interface SearchResponse {
   embedding_provider: string;    // "dummy" | "local_st" | ...
   embedding_model: string;
   embedding_dimension: number;
+  reranker: string | null;
   hits: SearchHit[];
 }
 
@@ -698,8 +781,35 @@ export interface SearchRequest {
   q: string;
   limit?: number;                // 1–50, default 10
   municipality?: string | null;
+  year?: number | null;
   document_type?: DocumentType | null;
   source_id?: string | null;     // UUID
+  local_only?: boolean;          // default true
+}
+
+export type AskMode = "ciudadano" | "investigador";
+
+export interface AskHistoryTurn {
+  question: string;
+  answer: string;
+}
+
+export interface AskSource {
+  title: string | null;
+  inferred_title: string | null;
+  url: string;
+  page_start: number | null;
+  page_end: number | null;
+  jurisdiction: Jurisdiction;
+  excerpt: string;
+}
+
+export interface AskResponse {
+  answer: string;
+  model: string;
+  mode: AskMode;
+  iterations: number;
+  sources: AskSource[];
 }
 
 export interface ApiError {
@@ -816,8 +926,9 @@ export function SearchResults({ hits }: { hits: SearchHit[] }) {
       {hits.map((hit) => (
         <li key={hit.chunk.id}>
           <header>
-            <strong>{hit.document.title ?? "(sin título)"}</strong>
-            <span> · score {hit.score.toFixed(3)}</span>
+            <strong>{hit.document.inferred_title ?? hit.document.title ?? "(sin título)"}</strong>
+            <span> · score {(hit.rerank_score ?? hit.score).toFixed(3)}</span>
+            <span> · {hit.document.jurisdiction}</span>
             {hit.chunk.page_start != null && (
               <span> · pág. {hit.chunk.page_start}
                 {hit.chunk.page_end !== hit.chunk.page_start && `–${hit.chunk.page_end}`}
@@ -897,6 +1008,8 @@ Recomendación de UX: una sola caja de búsqueda con dos modos/botones — **"Ve
 | Campo | Tipo | Requerido | Notas |
 |---|---|---|---|
 | `question` | string | sí | Pregunta en lenguaje natural. Mínimo 3 caracteres (si no, `422`). |
+| `mode` | `ciudadano` \| `investigador` | no | Default `ciudadano`. `investigador` pide más detalle técnico y trazabilidad. |
+| `history` | `{ question, answer }[]` | no | Turnos previos que el cliente reenvía para contexto. El backend no guarda conversaciones. |
 
 **Response `200`** (`AskResponse`):
 
@@ -904,6 +1017,7 @@ Recomendación de UX: una sola caja de búsqueda con dos modos/botones — **"Ve
 |---|---|---|
 | `answer` | string | Respuesta redactada en español, citando documentos por su título. |
 | `model` | string | Modelo LLM que respondió (ej. `gemini-2.5-pro`). Útil para mostrar "Generado por…". |
+| `mode` | string | Modo aplicado; úsalo para badge o para ofrecer "ver versión técnica". |
 | `iterations` | int | Cuántas vueltas de búsqueda/razonamiento tomó (1 = respondió a la primera). Informativo. |
 | `sources` | array | Documentos que el agente consultó. Ver tabla siguiente. Puede venir vacío si respondió sin necesitar buscar. |
 
@@ -912,10 +1026,12 @@ Cada objeto en `sources` (`AskSource`):
 | Campo | Tipo | Uso en UI |
 |---|---|---|
 | `title` | string \| null | Título del documento. Si es `null`, mostrar "Documento sin título". |
+| `inferred_title` | string \| null | Título legible derivado del contenido. Prefiérelo sobre `title`. |
 | `url` | string | URL oficial del PDF. Hacer la card **clickable** a este enlace. |
 | `page_start` | int \| null | Página del fragmento citado. Mostrar "pág. 12" si no es `null`. |
 | `page_end` | int \| null | Última página del fragmento. |
 | `jurisdiction` | string | `municipal` / `state` / `federal` / `unknown`. Badge opcional. |
+| `excerpt` | string | Cita textual breve en la que se apoya la respuesta. Úsala para verificar mejor que el título. |
 
 Ejemplo de respuesta (contrato, no código de front):
 
@@ -923,9 +1039,18 @@ Ejemplo de respuesta (contrato, no código de front):
 {
   "answer": "Para una licencia de construcción necesitas presentar… (según el Reglamento de construcción municipal).",
   "model": "gemini-2.5-pro",
+  "mode": "ciudadano",
   "iterations": 2,
   "sources": [
-    { "title": "Reglamento de construcción municipal", "url": "https://…", "page_start": 12, "page_end": 12, "jurisdiction": "municipal" }
+    {
+      "title": "Reglamento de construcción municipal",
+      "inferred_title": "Reglamento municipal de construcción",
+      "url": "https://…",
+      "page_start": 12,
+      "page_end": 12,
+      "jurisdiction": "municipal",
+      "excerpt": "Artículo 24. Para obtener la licencia de construcción…"
+    }
   ]
 }
 ```
@@ -934,14 +1059,36 @@ Llamada de referencia para probar el endpoint:
 
 ```bash
 curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
-  -d '{"question":"¿Qué requisitos piden para una licencia de construcción?"}' | jq .
+  -d '{"question":"¿Y en Tequila?","mode":"ciudadano","history":[{"question":"¿Qué requisitos piden para una licencia de construcción en Tala?","answer":"En Tala se encontró…"}]}' | jq .
 ```
 
 ### 11.3 Estados de UI que SÍ o SÍ hay que manejar
 
+#### `.env`, iteraciones y timeout
+
+El frontend no lee `.env` del backend. Ese archivo vive en el servidor y controla
+si `/ask` existe realmente:
+
+| Variable backend | Qué cambia para la UI |
+|---|---|
+| `LLM_API_KEY` | Si está vacío, `/ask` responde `503`; muestra el asistente como no disponible. |
+| `LLM_MAX_ITERS` | Límite de vueltas de búsqueda/razonamiento. Más alto puede mejorar respuestas difíciles, pero también aumenta latencia. |
+| `LLM_TIMEOUT_SECONDS` | Timeout por llamada al proveedor LLM, no timeout total de `/ask`. El cliente debe esperar más que eso. |
+| `LLM_ROUTER_MODEL` | Si existe, saludos/fuera-de-tema pueden responder rápido con `iterations = 0`. |
+
+`iterations` en la respuesta es informativo: `0` significa que el router contestó
+sin entrar a búsqueda; `1` significa una vuelta del loop; `2+` significa que el
+agente buscó/razonó más de una vez. Si llega al máximo, el backend fuerza una
+respuesta final con la evidencia reunida. No uses `iterations` como error; úsalo
+para explicar latencia o mostrar transparencia técnica.
+
+El portal usa `180_000 ms` como timeout de cliente para `/ask`. Mantén algo de ese
+orden porque el peor caso puede sumar varias llamadas LLM: hasta
+`LLM_MAX_ITERS`, una final forzada y, si está activo, una llamada previa del router.
+
 1. **Latencia alta (lo más importante).** El agente hace varias búsquedas y una o más llamadas a un modelo remoto. Espera **5–30 s, a veces más**. No es como `/search`.
    - Muestra un indicador de progreso con texto tranquilizador ("Buscando en los documentos del municipio…"), idealmente rotando el mensaje cada pocos segundos para que no parezca colgado.
-   - Pon un **timeout de cliente generoso**: igual o mayor a `LLM_TIMEOUT_SECONDS` del backend (por defecto 120 s). Un timeout corto (5–10 s) cortará respuestas válidas.
+   - Pon un **timeout de cliente generoso**: igual o mayor a `LLM_TIMEOUT_SECONDS` del backend (por defecto 60 s; el portal usa 180 s). Un timeout corto (5–10 s) cortará respuestas válidas.
    - No bloquees toda la UI: deja al usuario cancelar o seguir navegando.
 
 2. **Agente apagado → `503`.** Si el backend no tiene `LLM_API_KEY`, `/ask` responde `503` con `{ "detail": "Agent not configured. Set LLM_API_KEY…" }`.
@@ -950,7 +1097,7 @@ curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
 
 3. **Respuesta "no encontré evidencia".** El agente está instruido para decir que no hay información en vez de inventar. Eso llega como un `200` normal con un `answer` que lo explica y `sources` posiblemente vacío. **No lo trates como error** — muéstralo tal cual.
 
-4. **Error del modelo / timeout / cuota → `500` o error de red.** El proveedor LLM remoto puede fallar o agotar cuota. Muestra un mensaje amable ("El asistente tuvo un problema, intenta de nuevo") y permite **reintentar**. No muestres el stack ni el detalle técnico crudo al ciudadano.
+4. **Error del modelo / timeout / cuota → `502`, `500` o error de red.** El proveedor LLM remoto puede fallar o agotar cuota. Muestra un mensaje amable ("El asistente tuvo un problema, intenta de nuevo") y permite **reintentar**. No muestres el stack ni el detalle técnico crudo al ciudadano.
 
 5. **Sin streaming (por ahora).** La respuesta llega **completa de una sola vez**, no token por token. Si quieres efecto "máquina de escribir" es puramente cosmético del front; el backend no transmite parcial todavía (ver §11.6).
 
@@ -968,15 +1115,15 @@ Heads-up al equipo: si esto molesta, se puede exponer un flag (`agent_enabled`) 
 El valor cívico del agente está en que **se puede verificar**. Reglas de presentación:
 
 - Muestra el `answer` como texto redactado, legible.
-- Debajo, lista **siempre** las `sources` como tarjetas/clickables que abren el `url` (el PDF oficial) en pestaña nueva. Incluye `title`, la página ("pág. 12") y, si quieres, el badge de `jurisdiction`.
+- Debajo, lista **siempre** las `sources` como tarjetas/clickables que abren el `url` (el PDF oficial) en pestaña nueva. Incluye `inferred_title ?? title`, la página ("pág. 12"), el `excerpt` y, si quieres, el badge de `jurisdiction`.
 - Si `sources` está vacío pero hay `answer`, deja claro que es una respuesta sin documento citado (poco común; trátalo con cautela visual).
 - Opcional: muestra `model` en letra chica ("Respuesta generada por gemini-2.5-pro a partir de documentos públicos") — transparencia sobre que es IA, alineado con el principio del proyecto de IA como interfaz, no autoridad.
 
-### 11.6 Conversación de un solo turno (sin memoria)
+### 11.6 Historial enviado por el cliente
 
-Cada `POST /ask` es **independiente**: el backend no recuerda preguntas anteriores. En la UI puedes mostrar un historial visual, pero cada pregunta se envía sola, sin contexto previo. Si el usuario hace una repregunta ("¿y para el otro trámite?"), debes reformularla completa antes de enviarla, o el agente no entenderá el "otro".
+El servidor es **stateless**: no recuerda preguntas anteriores ni guarda chats. Si quieres que una repregunta ("¿y en Tequila?") conserve contexto, el frontend debe mandar `history` con pares `{ question, answer }` de la sesión actual.
 
-Heads-up: el multi-turno (memoria de conversación) sería un cambio de backend (aceptar un historial de mensajes). No lo asumas disponible.
+El agente sólo usa los últimos turnos para acotar tokens; no envíes tool traces, sólo las preguntas y respuestas finales que el usuario vio. Si no mandas `history`, `/ask` se comporta como una pregunta independiente.
 
 ### 11.7 Seguridad — la API key NUNCA toca el frontend
 

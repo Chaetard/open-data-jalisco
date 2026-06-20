@@ -58,16 +58,18 @@ export type Document = {
   id: string;
   source_id: string;
   sha256: string;
-  title: string;
+  title: string | null;
+  inferred_title?: string | null;
   document_type: DocumentType;
   municipality: string;
   year: number | null;
+  jurisdiction: "municipal" | "state" | "federal" | "unknown";
   official_url: string;
-  captured_url: string;
+  captured_url: string | null;
   captured_at: string;
   mime_type: string;
   storage_path: string;
-  file_size: number | null;
+  file_size: number;
   processing_status: ProcessingStatus;
   needs_ocr: boolean;
   version: number;
@@ -93,6 +95,7 @@ export type Chunk = {
 
 export type SearchHit = {
   score: number;
+  rerank_score?: number | null;
   chunk: Chunk;
   document: Document;
 };
@@ -102,16 +105,17 @@ export type SearchResponse = {
   embedding_provider: string;
   embedding_model: string;
   embedding_dimension: number;
+  reranker: string | null;
   hits: SearchHit[];
 };
 
 export type ManifestSummary = {
   filename: string;
   source_slug: string;
-  municipality: string;
-  generated_at: string;
-  document_count: number;
-  pipeline_version: string;
+  municipality: string | null;
+  generated_at: string | null;
+  document_count: number | null;
+  pipeline_version: string | null;
 };
 
 export type StatsResponse = {
@@ -124,15 +128,23 @@ export type StatsResponse = {
 };
 
 export type AskSource = {
+  inferred_title?: string | null;
   title: string | null;
   url: string;
   page_start: number | null;
   page_end: number | null;
   jurisdiction: string; // municipal | state | federal | unknown
+  excerpt?: string | null;
 };
+
+export type AskMode = "ciudadano" | "investigador";
+
+/** Prior turn replayed to the agent for follow-up context (not persisted server-side). */
+export type AskHistoryTurn = { question: string; answer: string };
 
 export type AskResponse = {
   answer: string;
+  mode: AskMode;
   model: string;
   iterations: number;
   sources: AskSource[];
@@ -152,8 +164,10 @@ export type SearchParams = {
   q: string;
   limit?: number;
   municipality?: string;
+  year?: number | null;
   document_type?: DocumentType | "";
   source_id?: string;
+  local_only?: boolean;
 };
 
 /** Opciones por petición: cancelación y tiempo de espera. */
@@ -296,7 +310,12 @@ export const api = {
       request<SearchResponse>("/search", {
         ...options,
         method: "POST",
-        body: JSON.stringify({ ...body, document_type: body.document_type || undefined }),
+        body: JSON.stringify({
+          ...body,
+          document_type: body.document_type || undefined,
+          year: body.year ?? undefined,
+          local_only: body.local_only ?? true,
+        }),
       }),
   },
 
@@ -312,12 +331,17 @@ export const api = {
      * con citas. Latencia alta (varias búsquedas + LLM): timeout por defecto de
      * 180s, mayor al del backend. Devuelve 503 si el agente no está configurado.
      */
-    ask: (question: string, options?: RequestOptions) =>
+    ask: (
+      question: string,
+      mode: AskMode = "ciudadano",
+      history: AskHistoryTurn[] = [],
+      options?: RequestOptions,
+    ) =>
       request<AskResponse>("/ask", {
         timeoutMs: 180_000,
         ...options,
         method: "POST",
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, mode, history }),
       }),
   },
 };

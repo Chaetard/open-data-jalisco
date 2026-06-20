@@ -1,1067 +1,742 @@
-# Guía de implementación frontend — open-data-jalisco API
+# API pública — open-data-jalisco
 
-Guía agnóstica de framework para conectar un frontend (React, Vue, Svelte, Next, Astro, Angular, vanilla, lo que sea) al backend FastAPI de `open-data-jalisco`. El objetivo es probar cada endpoint y armar pantallas básicas de validación, no producir un cliente final.
+Referencia completa de la API HTTP. Documenta **exactamente** los endpoints que
+expone `open_data_jalisco.api.app:app` (FastAPI). Si un endpoint no está aquí, no
+existe.
 
-No incluye código de implementación: incluye contratos, ejemplos de request/response, comportamiento esperado y los detalles que el frontend necesita conocer (paginación, filtros, errores, semántica de campos).
-
----
-
-## 1. Información del servicio
-
-| Dato              | Valor                                                                                                                                                                                                                                                                                                                   |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Base URL local    | `http://localhost:8000`                                                                                                                                                                                                                                                                                                 |
-| Levantar API      | `make api` (alias de `uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .`)                                                                                                                                                                                                                |
-| Docs interactivas | `GET /docs` (Swagger UI) y `GET /redoc`                                                                                                                                                                                                                                                                                 |
-| OpenAPI JSON      | `GET /openapi.json` — útil para autogenerar tipos/clientes                                                                                                                                                                                                                                                              |
-| Content-Type      | `application/json; charset=utf-8` (request y response salvo `/health`)                                                                                                                                                                                                                                                  |
-| Autenticación     | Ninguna actualmente (no hay tokens, no hay cookies)                                                                                                                                                                                                                                                                     |
-| CORS              | **Configurado y env-driven**. Por default acepta `http://localhost:5173` (Vite), `http://localhost:3000` (CRA/Next) y `http://127.0.0.1:5173`. Para prod o un puerto distinto, override `CORS_ORIGINS` en `.env` con una lista separada por comas (ej. `CORS_ORIGINS="https://odj.example.com,http://localhost:5173"`). |
-| Errores           | FastAPI devuelve `{ "detail": "<mensaje>" }` con códigos HTTP estándar (404, 422, 500). 422 viene con un array de errores de validación.                                                                                                                                                                                |
+- **Versión del documento**: generado para la API `0.1.x`.
+- **Licencia**: AGPL-3.0-or-later. Ver [`/source`](#get-source).
+- **Repositorio**: <https://github.com/Chaetard/open-data-jalisco>
 
 ---
 
-## 2. Mapa de endpoints
+## Tabla de contenidos
 
-| Método | Ruta                              | Propósito                                                                                                                                                       |
-| ------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/health`                         | Liveness check, versión, environment.                                                                                                                           |
-| GET    | `/sources`                        | Lista de fuentes (municipios/portales) registradas.                                                                                                             |
-| GET    | `/sources/{slug}`                 | Detalle de una fuente por slug.                                                                                                                                 |
-| GET    | `/documents`                      | Lista paginada de documentos con filtros.                                                                                                                       |
-| GET    | `/documents/{document_id}`        | Detalle de un documento por UUID.                                                                                                                               |
-| GET    | `/documents/{document_id}/chunks` | Chunks de texto extraídos del documento.                                                                                                                        |
-| GET    | `/search`                         | Búsqueda semántica via query string (legacy).                                                                                                                   |
-| POST   | `/search`                         | Búsqueda semántica con body JSON (preferido).                                                                                                                   |
-| POST   | `/semantic-search`                | Alias explícito de `POST /search`.                                                                                                                              |
-| GET    | `/manifests`                      | Lista de manifests de integridad generados.                                                                                                                     |
-| POST   | `/ask`                            | **Agente**: pregunta en lenguaje natural → respuesta redactada con citas. Requiere `LLM_API_KEY` en el backend; si no está configurado responde `503`. Ver §11. |
-
-Todos los endpoints son `GET` excepto los `POST` de búsqueda y `/ask`. No hay endpoints de mutación expuestos al frontend — ingesta/procesamiento ocurren vía CLI (`odj ingest`, `odj process`).
+1. [Conceptos básicos](#conceptos-básicos)
+2. [Autenticación](#autenticación)
+3. [CORS](#cors)
+4. [Convenciones](#convenciones)
+5. [Manejo de errores](#manejo-de-errores)
+6. [Enumeraciones](#enumeraciones)
+7. [Endpoints](#endpoints)
+   - [GET /health](#get-health)
+   - [GET /stats](#get-stats)
+   - [GET /source](#get-source)
+   - [GET /sources](#get-sources)
+   - [GET /sources/{slug}](#get-sourcesslug)
+   - [GET /documents](#get-documents)
+   - [GET /documents/{document_id}](#get-documentsdocument_id)
+   - [GET /documents/{document_id}/chunks](#get-documentsdocument_idchunks)
+   - [POST /search](#post-search)
+   - [GET /search](#get-search)
+   - [POST /semantic-search](#post-semantic-search)
+   - [GET /manifests](#get-manifests)
+   - [POST /ask](#post-ask)
+8. [Esquemas](#esquemas)
+9. [OpenAPI / Swagger](#openapi--swagger)
+10. [Recetas](#recetas)
 
 ---
 
-## 3. Convenciones globales
+## Conceptos básicos
 
-### 3.1 Identificadores
+- **Protocolo**: HTTP/1.1, JSON sobre `application/json`.
+- **Base URL (dev)**: `http://localhost:8000`
+- **Base URL (prod)**: el dominio donde despliegues (ej. `https://api.odj.example.com`).
+- **Estado**: la API es **solo lectura**. No hay endpoints de escritura, borrado ni
+  mutación. La ingesta y el procesamiento se hacen offline vía la CLI `odj`, no por HTTP.
+- **Sin versionado en la ruta**: los endpoints no llevan prefijo `/v1`. La versión real
+  se reporta en `GET /health` y `GET /source`.
 
-- `id` de fuentes y documentos: **UUID v4** (string, formato `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
-- `slug` de fuentes: string corto, sin espacios, ej. `"tala"`.
-- `sha256`: string hex de 64 caracteres. Es la huella de contenido — dos documentos con la misma URL y distinto sha256 son versiones distintas.
+### Modelo de datos en una frase
 
-### 3.2 Fechas
+Una **fuente** (`source`, ej. el portal de transparencia de Tala) tiene muchos
+**documentos** (`document`, un PDF). Cada documento se parte en **chunks** (fragmentos de
+texto con embedding). La búsqueda semántica corre sobre los chunks y devuelve el chunk +
+su documento padre.
 
-- `captured_at` viene como **ISO-8601 UTC** (ej. `"2026-05-31T14:22:03.812345+00:00"`). Parsea con `Date` nativo / `Temporal` / la librería que uses.
-
-### 3.3 Paginación
-
-`GET /documents` paginará con `limit` (1–200, default 50) y `offset` (≥0, default 0). El backend NO devuelve un `total` ni un `next_cursor`: la única manera de saber si hay más es comparar `response.length` con el `limit` enviado.
-
-Estrategia frontend simple para "ver más":
-
-- Pide `limit=50, offset=0`.
-- Si la respuesta trae 50 items, hay potencialmente más → siguiente página con `offset=50`.
-- Si trae <50, llegaste al final.
-
-### 3.4 Enums
-
-El backend serializa los enums como strings minúsculas:
-
-- `SourceKind`: `municipal_portal`, `state_transparency_portal`, `national_transparency_platform`, `gazette`, `other`.
-- `DocumentType`: `contract`, `bidding`, `award`, `regulation`, `minutes`, `budget`, `financial_report`, `other`, `unknown`.
-- `ProcessingStatus`: `pending`, `extracted`, `chunked`, `indexed`, `failed`, `needs_ocr`.
-
-El frontend puede declarar tipos union de string para estos campos y nunca recibirá un valor fuera de esa lista.
-
-### 3.5 Manejo de errores
-
-Todas las respuestas no-2xx tienen este shape:
-
-```json
-{ "detail": "Source not found: foo" }
+```
+source ──< document ──< chunk
 ```
 
-Excepto `422 Unprocessable Entity` (validación de FastAPI), que devuelve:
+---
+
+## Autenticación
+
+**Ninguna.** Todos los endpoints son públicos y anónimos. No hay API keys, tokens ni
+cookies. Es información pública por diseño (transparencia gubernamental).
+
+> Si en el futuro se agregan endpoints sensibles o de escritura, llevarán autenticación
+> propia; los de lectura actuales seguirán abiertos.
+
+---
+
+## CORS
+
+El navegador bloquea peticiones cross-origin salvo que el origin esté en la whitelist.
+La lista se controla con la variable de entorno `CORS_ORIGINS` (separada por comas):
+
+```bash
+CORS_ORIGINS="http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+```
+
+- Métodos permitidos: `GET`, `POST`, `OPTIONS`.
+- Headers permitidos: `Content-Type`, `Accept`.
+- `allow_credentials: true`.
+- En producción, fija `CORS_ORIGINS` al dominio exacto del frontend. **No uses `*`.**
+
+Si `CORS_ORIGINS` queda vacío, el middleware CORS no se monta (peticiones desde un
+navegador en otro origin fallarán; `curl` y server-to-server no se ven afectados).
+
+---
+
+## Convenciones
+
+| Tema | Convención |
+|---|---|
+| Identificadores | `UUID` v4 en formato string (`"3f2a…"`). |
+| Fechas | ISO-8601 UTC (`"2026-06-18T14:03:21.123456Z"`). |
+| Paginación | `limit` + `offset` (sin cursores). Los límites máximos varían por endpoint. |
+| Campos opcionales | Se devuelven como `null`, no se omiten. |
+| `document_type` / `processing_status` / `kind` | strings de [enumeraciones](#enumeraciones) fijas. |
+| Hashing | `sha256` hex de 64 chars; identifica el contenido binario del documento. |
+
+---
+
+## Manejo de errores
+
+Errores de aplicación (`HTTPException`) devuelven el formato estándar de FastAPI:
+
+```json
+{ "detail": "Document not found: 3f2a1b8c-..." }
+```
+
+Errores de validación de parámetros (422) devuelven el formato detallado de FastAPI:
 
 ```json
 {
   "detail": [
     {
-      "type": "int_parsing",
-      "loc": ["query", "limit"],
-      "msg": "Input should be a valid integer, unable to parse string as an integer",
-      "input": "abc"
+      "type": "string_too_short",
+      "loc": ["query", "q"],
+      "msg": "String should have at least 2 characters",
+      "input": "a"
     }
   ]
 }
 ```
 
-Recomendación: el cliente HTTP debería normalizar ambos a un objeto `{ status, message, fieldErrors? }` para mostrar feedback uniforme.
+| Código | Cuándo |
+|---|---|
+| `200` | OK. |
+| `404` | Recurso no encontrado (documento/fuente inexistente). |
+| `422` | Parámetro inválido (faltante, fuera de rango, tipo incorrecto). |
+| `502` | Error del proveedor LLM aguas arriba en `POST /ask`. |
+| `503` | Agente deshabilitado porque falta `LLM_API_KEY`. |
+| `500` | Error interno (DB caída, embedder no inicializa, etc.). |
 
 ---
 
-## 4. Endpoints en detalle
+## Enumeraciones
 
-### 4.1 `GET /health`
+### `DocumentType` (`document_type`)
 
-Liveness probe. Sin parámetros, sin auth.
+`contract`, `bidding`, `award`, `regulation`, `minutes`, `budget`,
+`financial_report`, `other`, `unknown`
 
-**Request**
+### `ProcessingStatus` (`processing_status`)
 
+`pending`, `extracted`, `chunked`, `indexed`, `failed`, `needs_ocr`
+
+> Solo los documentos en `indexed` aparecen en resultados de búsqueda (son los que
+> tienen embeddings).
+
+### `SourceKind` (`kind`)
+
+`municipal_portal`, `state_transparency_portal`,
+`national_transparency_platform`, `gazette`, `other`
+
+---
+
+## Endpoints
+
+### `GET /health`
+
+Liveness check. No toca la base de datos.
+
+**Respuesta `200`**
+
+```json
+{ "status": "ok", "version": "0.1.0", "environment": "local" }
 ```
-GET /health
+
+```bash
+curl -s http://localhost:8000/health
 ```
 
-**Response 200**
+---
+
+### `GET /stats`
+
+Métricas agregadas para tarjetas de dashboard. Una query por métrica — usa esto en lugar
+de paginar `/documents` para contar. Los números coinciden con `odj db stats`.
+
+**Respuesta `200`** — [`StatsResponse`](#statsresponse)
 
 ```json
 {
-  "status": "ok",
+  "documents_total": 2433,
+  "documents_by_status": [
+    { "status": "failed",  "count": 12 },
+    { "status": "indexed", "count": 1513 },
+    { "status": "pending", "count": 908 }
+  ],
+  "chunks_total": 92451,
+  "unique_documents_by_sha256": 740,
+  "sources_total": 1,
+  "documents_by_source": [
+    { "slug": "tala", "count": 2433 }
+  ]
+}
+```
+
+> `documents_total` cuenta solo `is_current = true`. `unique_documents_by_sha256` cuenta
+> sha256 distintos entre chunks — útil para saber cuántos documentos *de contenido único*
+> hay (el portal republica PDFs idénticos en varias URLs).
+
+```bash
+curl -s http://localhost:8000/stats | jq
+```
+
+---
+
+### `GET /source`
+
+Divulgación de código fuente requerida por AGPLv3 §13. Si despliegas una versión
+modificada, este endpoint **debe** apuntar a tu fork público.
+
+**Respuesta `200`**
+
+```json
+{
+  "repository": "https://github.com/Chaetard/open-data-jalisco",
+  "license": "AGPL-3.0-or-later",
   "version": "0.1.0",
-  "environment": "local"
+  "commit": null
 }
 ```
 
-**Uso en frontend**
-
-- Mostrar un indicador "API conectada / desconectada" en la barra de estado de la app de prueba.
-- Llamarlo al arrancar la app y, si quieres, cada 30s con `setInterval`.
+`commit` se rellena en deploy con la variable de entorno `SOURCE_COMMIT` (ej. el SHA del
+build). Si no se setea, es `null`.
 
 ---
 
-### 4.2 `GET /sources`
+### `GET /sources`
 
-Lista las fuentes registradas (cada municipio/portal es una fuente).
+Lista las fuentes de datos.
 
 **Query params**
 
-| Param              | Tipo    | Default | Notas                                             |
-| ------------------ | ------- | ------- | ------------------------------------------------- |
-| `include_inactive` | boolean | `false` | Si `true`, incluye fuentes con `is_active=false`. |
+| Param | Tipo | Default | Descripción |
+|---|---|---|---|
+| `include_inactive` | bool | `false` | Si `true`, incluye fuentes con `is_active = false`. |
 
-**Request**
+**Respuesta `200`** — `list[`[`SourceOut`](#sourceout)`]`
 
+```bash
+curl -s "http://localhost:8000/sources" | jq
+curl -s "http://localhost:8000/sources?include_inactive=true" | jq
 ```
-GET /sources
-GET /sources?include_inactive=true
-```
-
-**Response 200** — array de objetos `SourceOut`:
-
-```json
-[
-  {
-    "id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
-    "slug": "tala",
-    "name": "Tala (SAPUMU portal)",
-    "kind": "municipal_portal",
-    "municipality": "Tala",
-    "official_url": "https://tala.sapumu.com/municipio/transparencia/articulo-8",
-    "description": "Municipal source served from the SAPUMU portal...",
-    "is_active": true
-  }
-]
-```
-
-**Uso en frontend**
-
-- Llenar un `<select>` o lista lateral con las fuentes disponibles.
-- El `id` (UUID) se usa para filtrar documentos por `source_id` en `/documents` y `/search`.
-- El `slug` se usa para llamar `GET /sources/{slug}` o filtrar `/manifests?source_slug=...`.
 
 ---
 
-### 4.3 `GET /sources/{slug}`
+### `GET /sources/{slug}`
 
-Detalle de una fuente.
+Una fuente por su `slug` (ej. `tala`).
 
-**Path param**
+**Respuesta `200`** — [`SourceOut`](#sourceout)
+**Respuesta `404`** — `{ "detail": "Source not found: <slug>" }`
 
-| Param  | Tipo   | Notas         |
-| ------ | ------ | ------------- |
-| `slug` | string | Ej. `"tala"`. |
-
-**Request**
-
+```bash
+curl -s http://localhost:8000/sources/tala | jq
 ```
-GET /sources/tala
-```
-
-**Response 200**
-
-```json
-{
-  "id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
-  "slug": "tala",
-  "name": "Tala (SAPUMU portal)",
-  "kind": "municipal_portal",
-  "municipality": "Tala",
-  "official_url": "https://tala.sapumu.com/municipio/transparencia/articulo-8",
-  "description": "Municipal source served from the SAPUMU portal...",
-  "is_active": true
-}
-```
-
-**Response 404**
-
-```json
-{ "detail": "Source not found: foo" }
-```
-
-**Uso en frontend**
-
-- Página "Detalle de fuente" donde muestras nombre, municipio y un link al `official_url`.
-- Botón "Ver documentos de esta fuente" → `GET /documents?source_id={id}`.
 
 ---
 
-### 4.4 `GET /documents`
+### `GET /documents`
 
-Lista paginada con filtros opcionales.
+Lista documentos con filtros. Paginado.
 
 **Query params**
 
-| Param           | Tipo    | Default | Validación                                |
-| --------------- | ------- | ------- | ----------------------------------------- |
-| `source_id`     | UUID    | —       | Filtra documentos de una fuente.          |
-| `municipality`  | string  | —       | Match exacto (ej. `"Tala"`).              |
-| `document_type` | string  | —       | Uno de los valores de `DocumentType`.     |
-| `year`          | int     | —       | Ej. `2025`.                               |
-| `current_only`  | boolean | `true`  | Si `false`, incluye versiones históricas. |
-| `limit`         | int     | `50`    | 1–200.                                    |
-| `offset`        | int     | `0`     | ≥0.                                       |
+| Param | Tipo | Default | Rango | Descripción |
+|---|---|---|---|---|
+| `source_id` | UUID | — | | Filtra por fuente. |
+| `municipality` | string | — | | Filtra por municipio (ej. `Tala`). |
+| `document_type` | string | — | [enum](#documenttype-document_type) | Filtra por tipo. |
+| `year` | int | — | | Filtra por año del documento. |
+| `current_only` | bool | `true` | | Solo la versión vigente de cada documento. |
+| `limit` | int | `50` | `1`–`200` | Tamaño de página. |
+| `offset` | int | `0` | `≥ 0` | Desplazamiento. |
 
-**Request**
+**Respuesta `200`** — `list[`[`DocumentOut`](#documentout)`]`
 
+```bash
+# Primeros 200 documentos indexados de Tala
+curl -s "http://localhost:8000/documents?municipality=Tala&limit=200" | jq
+
+# Página 2 de reglamentos
+curl -s "http://localhost:8000/documents?document_type=regulation&limit=50&offset=50" | jq
 ```
-GET /documents?source_id=8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c&year=2025&limit=20&offset=0
-```
-
-**Response 200** — array de `DocumentOut`:
-
-```json
-[
-  {
-    "id": "11111111-2222-3333-4444-555555555555",
-    "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
-    "sha256": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
-    "title": "Documento SAPUMU Tala 2025-11 2743",
-    "document_type": "other",
-    "municipality": "Tala",
-    "year": 2025,
-    "official_url": "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/11/2743/VYx464GjY1.pdf",
-    "captured_url": "https://app-sapumu.sfo2.digitaloceanspaces.com/tala/content/2025/11/2743/VYx464GjY1.pdf",
-    "captured_at": "2026-05-31T14:22:03.812345+00:00",
-    "mime_type": "application/pdf",
-    "storage_path": "tala/9a8b7c6d.../document.pdf",
-    "file_size": 1580901,
-    "processing_status": "indexed",
-    "needs_ocr": false,
-    "version": 1,
-    "is_current": true,
-    "superseded_by": null
-  }
-]
-```
-
-**Notas sobre el modelo**
-
-- `version` y `is_current` permiten mostrar el historial. Si `is_current=false`, hay una versión más nueva; `superseded_by` apunta al UUID que la reemplazó (si está disponible).
-- `processing_status` te dice si el texto ya fue extraído (`extracted`, `chunked`, `indexed`) o falló (`failed`, `needs_ocr`). Solo `indexed` (o `chunked`) garantiza que `GET /documents/{id}/chunks` devuelva resultados.
-- `storage_path` es relativo al storage del backend — el frontend NO puede usarlo para descargar. Para descarga usa `official_url`.
-
-**Uso en frontend**
-
-- Tabla principal con paginación.
-- Filtros side-bar con los query params.
-- Click en una fila → ruta `/documents/{id}` para el detalle.
 
 ---
 
-### 4.5 `GET /documents/{document_id}`
+### `GET /documents/{document_id}`
 
-Detalle de un documento.
+Un documento por su UUID.
 
-**Path param**
+**Respuesta `200`** — [`DocumentOut`](#documentout)
+**Respuesta `404`** — `{ "detail": "Document not found: <uuid>" }`
 
-| Param         | Tipo | Notas    |
-| ------------- | ---- | -------- |
-| `document_id` | UUID | UUID v4. |
-
-**Request**
-
+```bash
+curl -s http://localhost:8000/documents/3f2a1b8c-1234-5678-9abc-def012345678 | jq
 ```
-GET /documents/11111111-2222-3333-4444-555555555555
-```
-
-**Response 200** — un único objeto `DocumentOut` (mismo schema que el array de `/documents`).
-
-**Response 404**
-
-```json
-{ "detail": "Document not found: 11111111-2222-3333-4444-555555555555" }
-```
-
-**Uso en frontend**
-
-- Pantalla de detalle del documento.
-- Botón "Descargar original" → `target="_blank"` apuntando a `official_url`.
-- Botón "Ver chunks" → `GET /documents/{id}/chunks`.
 
 ---
 
-### 4.6 `GET /documents/{document_id}/chunks`
+### `GET /documents/{document_id}/chunks`
 
-Chunks de texto del documento. Útiles para mostrar el cuerpo del documento ya procesado, o para construir el snippet de resultados de búsqueda.
+Todos los chunks de un documento, en orden (`chunk_index`). Útil para reconstruir el texto
+o resaltar el fragmento que devolvió la búsqueda.
 
-**Request**
+**Respuesta `200`** — `list[`[`ChunkOut`](#chunkout)`]`
+**Respuesta `404`** — `{ "detail": "Document not found: <uuid>" }` (si el documento no existe)
 
+```bash
+curl -s http://localhost:8000/documents/3f2a1b8c-.../chunks | jq '.[].text'
 ```
-GET /documents/11111111-2222-3333-4444-555555555555/chunks
-```
-
-**Response 200** — array de `ChunkOut` ordenado por `chunk_index`:
-
-```json
-[
-  {
-    "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-    "document_id": "11111111-2222-3333-4444-555555555555",
-    "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
-    "sha256": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
-    "chunk_index": 0,
-    "text": "REGLAMENTO DE GOBIERNO DEL MUNICIPIO DE TALA\nTÍTULO I\nDisposiciones Generales\nArtículo 1...",
-    "char_count": 1782,
-    "page_start": 1,
-    "page_end": 1,
-    "section_title": "Título I",
-    "document_type": "regulation",
-    "municipality": "Tala",
-    "year": 2025
-  }
-]
-```
-
-**Response 404**
-
-```json
-{ "detail": "Document not found: 11111111-2222-3333-4444-555555555555" }
-```
-
-**Notas**
-
-- Si el documento existe pero aún no fue procesado (`processing_status = "pending"` o `"failed"`), devuelve `200` con array vacío `[]`, no `404`.
-- `page_start`/`page_end` son `null` para extracciones que no tienen paginación (ej. CSV/XLSX).
-- `section_title` puede ser `null` si el extractor no detectó secciones.
-
-**Uso en frontend**
-
-- Vista "Leer documento": render lineal de `chunks[].text` separados por `chunk_index`.
-- Para anclas: `section_title` puede usarse como heading.
 
 ---
 
-### 4.7 Búsqueda semántica — `POST /search` (preferido)
+### `POST /search`
 
-Búsqueda semántica sobre el texto extraído. Internamente: la query se embeddea y se busca por distancia coseno contra los embeddings de los chunks.
+**Endpoint principal de búsqueda semántica.** Recibe una query en lenguaje natural, la
+convierte a embedding y devuelve los chunks más cercanos por distancia coseno. Los
+resultados se deduplican por `sha256` (PDFs idénticos publicados en varias URLs colapsan a
+un hit).
 
-**Request body** — `SearchRequest`:
+**Request body** — [`SearchRequest`](#searchrequest)
+
+| Campo | Tipo | Default | Rango | Descripción |
+|---|---|---|---|---|
+| `q` | string | — (req.) | `≥ 2` chars | Query libre. |
+| `limit` | int | `10` | `1`–`50` | Máximo de hits a devolver. |
+| `municipality` | string | `null` | | Filtra por municipio. |
+| `document_type` | string | `null` | [enum](#documenttype-document_type) | Filtra por tipo. |
+| `source_id` | UUID | `null` | | Filtra por fuente. |
+| `year` | int | `null` | `1900`–`2100` | Filtra por año del documento. |
+| `local_only` | bool | `true` | | Oculta material de referencia estatal/federal republicado, deja sólo lo municipal (y sin marcar). **Activo por defecto** — pasa `false` para buscar todo el corpus. Ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
+
+**Respuesta `200`** — [`SearchResponse`](#searchresponse)
+
+```bash
+curl -s -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"q": "presupuesto municipal", "limit": 5, "local_only": true}' | jq
+```
+
+**Ejemplo de respuesta (recortado)**
 
 ```json
 {
-  "q": "presupuesto de egresos 2025",
-  "limit": 10,
-  "municipality": "Tala",
-  "document_type": "budget",
-  "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c"
-}
-```
-
-| Campo           | Tipo   | Requerido | Default | Notas                    |
-| --------------- | ------ | --------- | ------- | ------------------------ |
-| `q`             | string | sí        | —       | Mínimo 2 caracteres.     |
-| `limit`         | int    | no        | `10`    | 1–50.                    |
-| `municipality`  | string | no        | —       | Filtro exacto.           |
-| `document_type` | string | no        | —       | Valor de `DocumentType`. |
-| `source_id`     | UUID   | no        | —       | Filtra a una fuente.     |
-
-**Response 200** — `SearchResponse`:
-
-```json
-{
-  "query": "presupuesto de egresos 2025",
-  "embedding_provider": "dummy",
-  "embedding_model": "dummy-v1",
+  "query": "requisitos para licencia de construcción",
+  "embedding_provider": "local_st",
+  "embedding_model": "intfloat/multilingual-e5-small",
   "embedding_dimension": 384,
+  "reranker": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
   "hits": [
     {
-      "score": 0.8742,
+      "score": 0.8721,
+      "rerank_score": 4.31,
       "chunk": {
-        "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        "document_id": "11111111-2222-3333-4444-555555555555",
-        "source_id": "8f1a3b4c-7d2e-4a9f-9b1c-2d3e4f5a6b7c",
-        "sha256": "9a8b7c6d5e4f...",
-        "chunk_index": 3,
-        "text": "El presupuesto de egresos del ejercicio 2025...",
-        "char_count": 1640,
-        "page_start": 4,
-        "page_end": 4,
-        "section_title": "Capítulo II",
-        "document_type": "budget",
-        "municipality": "Tala",
-        "year": 2025
+        "id": "…", "document_id": "…", "chunk_index": 4,
+        "text": "Requisitos: 1. Solicitud… 2. Identificación oficial…",
+        "page_start": 2, "page_end": 2, "section_title": "Requisitos",
+        "document_type": "regulation", "municipality": "Tala", "year": 2024
       },
       "document": {
-        "id": "11111111-2222-3333-4444-555555555555",
-        "title": "Presupuesto de Egresos 2025",
-        "official_url": "https://app-sapumu.../presupuesto-2025.pdf",
-        "sha256": "9a8b7c6d5e4f...",
-        "municipality": "Tala",
-        "year": 2025,
-        "document_type": "budget",
-        "processing_status": "indexed"
+        "id": "…", "title": "Reglamento de construcción municipal",
+        "inferred_title": "Reglamento municipal de construcción",
+        "document_type": "regulation", "official_url": "https://…",
+        "processing_status": "indexed", "is_current": true,
+        "jurisdiction": "municipal"
       }
     }
   ]
 }
 ```
 
-(El objeto `document` dentro de cada hit es el mismo `DocumentOut` completo del endpoint `/documents/{id}`; abreviado arriba por legibilidad.)
+#### Cómo interpretar `score`
 
-**Semántica del `score`**
+`score = max(0, 1 − distancia_coseno)`. Rango `[0, 1]`, mayor = más relevante.
 
-- Rango: `[0, 1]`. Mayor = más relevante.
-- Calculado como `max(0, 1 - distance_cosine)`. Un 0.0 significa que el match es marginal o que ya saturó el límite.
-- No es un porcentaje de relevancia "humano" — sirve para ordenar, no para mostrar "87% match" en UI a menos que aclares qué significa.
+| `score` | Lectura práctica |
+|---|---|
+| `> 0.88` | Match muy fuerte (suele haber solape literal o semántico claro). |
+| `0.84–0.88` | Relevante. La mayoría de buenos resultados caen aquí. |
+| `< 0.82` | Débil. Probablemente no es lo que buscabas. |
 
-**Comportamiento esperado**
+> Cuando los top hits tienen scores casi idénticos (ej. `0.868`–`0.872`), el embedder no
+> está discriminando bien — típico al usar lenguaje coloquial ciudadano contra documentos
+> en lenguaje legal/administrativo. Es una limitación conocida del retriever, mitigada por
+> el reranking (abajo).
 
-- Si no hay resultados, `hits` es array vacío `[]` (no 404).
-- Si el `embedding_provider` actual es `"dummy"` (default en local), los resultados serán determinísticos pero no semánticamente útiles — útil sólo para validar la integración.
-- 422 si `q` tiene menos de 2 caracteres.
+#### Calidad de búsqueda: reranking y jurisdicción
 
-**Uso en frontend**
+Dos mejoras opcionales sobre la búsqueda vectorial base, ambas activables sin migrar la DB:
 
-- Componente search-bar con debounce (≥300ms) que dispara el `POST`.
-- Lista de resultados: por cada hit muestra `document.title`, snippet de `chunk.text` (primeros 240 chars + `…`), `score` y un link al detalle del documento.
-- Filtros opcionales: select de municipio, tipo de documento, source.
+**1. Reranking (cross-encoder).** El embedder (bi-encoder) puntúa query y pasaje por
+separado y apelmaza resultados en un banco plano de scores. Si se activa
+`RERANK_PROVIDER=cross_encoder`, una segunda etapa cross-encoder lee `(query, pasaje)`
+juntos y reordena el top-N antes de truncar al `limit`. En la práctica separa el banco
+plano en un gradiente amplio y sube el documento correcto al `#1`. Cuando corre, cada hit
+trae `rerank_score` y la respuesta trae `reranker` con el modelo. Coste: ~470 MB de modelo
+y ~1-3 s/query en CPU. Desactivado (`none`) por defecto: sin coste, comportamiento idéntico.
+
+**2. Filtro de jurisdicción (`local_only`).** El portal municipal republica material de
+referencia *estatal* y *federal* (el presupuesto del Estado de Jalisco, leyes federales),
+todo bajo `municipality="Tala"`. Por eso "presupuesto municipal" devolvía los volúmenes del
+*Estado* arriba de los del municipio. Cada documento trae un badge `jurisdiction`
+(`municipal`/`state`/`federal`/`unknown`) inferido del título; **`local_only` está activo por
+defecto** y oculta `state` y `federal`, dejando lo municipal (y lo no marcado, que nunca se
+oculta por error). Pasa `local_only=false` para buscar el corpus completo.
+
+Se combinan: el reranking ordena bien el conjunto, `local_only` garantiza que no se cuele
+referencia de otro nivel de gobierno. El badge `jurisdiction` está siempre presente aunque
+no se filtre, para que el frontend lo muestre.
 
 ---
 
-### 4.8 `GET /search` (legacy, equivalente)
+### `GET /search`
 
-Mismo comportamiento que `POST /search` pero con query string. Útil para enlaces compartibles ("URL como estado").
-
-**Request**
-
-```
-GET /search?q=presupuesto%20de%20egresos%202025&limit=10&municipality=Tala
-```
-
-Mismos parámetros que el body del `POST`, mismo response. Preferí `POST` para queries largas o con muchos filtros.
-
----
-
-### 4.9 `POST /semantic-search`
-
-Alias explícito de `POST /search`. Mismo body, mismo response. Usar este cuando quieras dejar claro en el código del frontend que la intención es semántica (vs. otros tipos de búsqueda futuros como BM25).
-
----
-
-### 4.10 `GET /manifests`
-
-Lista los manifests de integridad generados por `odj manifest`. Son resúmenes con el conteo de documentos y la versión del pipeline en el momento de generación. Útiles para una pantalla de "auditoría".
+Variante GET, **legacy**. Mismo comportamiento que `POST /search` pero con query params.
+Prefiere `POST` para frontends nuevos.
 
 **Query params**
 
-| Param         | Tipo   | Default | Notas                           |
-| ------------- | ------ | ------- | ------------------------------- |
-| `source_slug` | string | —       | Filtra manifests de una fuente. |
+| Param | Tipo | Default | Rango |
+|---|---|---|---|
+| `q` | string | — (req.) | `≥ 2` chars |
+| `limit` | int | `10` | `1`–`50` |
+| `municipality` | string | `null` | |
+| `document_type` | string | `null` | |
+| `source_id` | UUID | `null` | |
+| `year` | int | `null` | `1900`–`2100` |
+| `local_only` | bool | `true` | |
 
-**Request**
-
-```
-GET /manifests
-GET /manifests?source_slug=tala
-```
-
-**Response 200** — array de `ManifestSummary`:
-
-```json
-[
-  {
-    "filename": "tala_2026-05-31T14-22-03.json",
-    "source_slug": "tala",
-    "municipality": "Tala",
-    "generated_at": "2026-05-31T14:22:03.812345+00:00",
-    "document_count": 42,
-    "pipeline_version": "0.1.0"
-  }
-]
-```
-
-**Notas**
-
-- `filename` es el nombre del JSON en disco bajo `datasets/manifests/`. El frontend NO puede descargarlo directamente vía API (no hay endpoint que sirva el blob). Si lo necesitas, agregar un router `GET /manifests/{filename}` al backend es trivial.
-- Si `MANIFESTS_DIR` está vacío, devuelve `[]`.
-
-**Uso en frontend**
-
-- Tabla "Auditoría / Manifests" con columnas `generated_at`, `source_slug`, `document_count`, `pipeline_version`.
-- Útil como prueba de existencia: si la cuenta crece, sabes que la ingesta corrió.
-
----
-
-## 5. Flujos de prueba sugeridos
-
-Estos son los flujos mínimos para validar que la integración frontend funciona. Hazlos en orden.
-
-### Flujo 1 — Liveness
-
-1. `GET /health` → confirma `status: "ok"`.
-
-### Flujo 2 — Catálogo de fuentes
-
-1. `GET /sources` → guarda el `id` y `slug` de la primera fuente.
-2. `GET /sources/{slug}` → confirma que el detalle coincide.
-3. `GET /sources/no-existe` → confirma `404` y muestra mensaje de error en UI.
-
-### Flujo 3 — Listado de documentos
-
-1. `GET /documents?limit=5` → confirma array con ≤5 items.
-2. `GET /documents?source_id={id}` (usando el id del flujo 2) → confirma que todos los items tienen ese `source_id`.
-3. `GET /documents?year=2025&document_type=budget` → confirma que el filtro se aplica.
-4. Pagina: `GET /documents?limit=5&offset=5` → confirma que los items son distintos a la primera página.
-
-### Flujo 4 — Detalle de documento + chunks
-
-1. Toma un `document_id` del flujo 3.
-2. `GET /documents/{id}` → confirma campos del modelo.
-3. `GET /documents/{id}/chunks` → si `processing_status = "indexed"`, esperabas chunks; si `"pending"`, esperabas `[]`.
-
-### Flujo 5 — Búsqueda
-
-1. `POST /search` con `{ "q": "ab" }` (mínimo 2 chars) → confirma 200 (o `[]` en hits si no hay nada indexado).
-2. `POST /search` con `{ "q": "a" }` → confirma 422 y muestra error de validación en UI.
-3. `POST /search` con filtros (`municipality`, `document_type`, `source_id`) → confirma que `hits[].document` cumple los filtros.
-4. `GET /search?q=test` → confirma que el equivalente GET responde igual.
-
-### Flujo 6 — Manifests
-
-1. `GET /manifests` → confirma array (puede estar vacío en local recién montado).
-2. Si no hay manifests, generar uno desde el backend: `odj manifest <slug>` y volver a llamar.
-
----
-
-## 6. Recomendaciones para el cliente HTTP del frontend
-
-Sin asumir lenguaje, los puntos que debes cubrir en cualquier cliente:
-
-1. **Capa única de fetch**. Un módulo `apiClient` que reciba `{ method, path, query, body }` y centralice base URL, headers y manejo de errores. No esparzas `fetch`/`axios` por la UI.
-2. **Tipos / contratos**. Genera tipos desde `GET /openapi.json` (hay generadores para casi todo: `openapi-typescript`, `openapi-generator`, `quicktype`). Mantén un único `types.ts`/`api.d.ts`/equivalente.
-3. **Cancelación**. Implementa `AbortController` (o equivalente) en `/search` — un usuario tipeando dispara múltiples requests y la última gana.
-4. **Errores**. Normaliza `detail: string` y `detail: array` a una forma única: `{ message, fieldErrors }`. Las validaciones de FastAPI (422) deben mapearse a errores por campo.
-5. **Loading / empty / error**. Cada vista debe tener los 4 estados: loading, error, empty (`[]`) y populated. La búsqueda semántica con `dummy` provider devolverá frecuentemente `hits: []` — no es un bug.
-6. **Cache opcional**. `/sources` y `/manifests` son baratas y cambian raro — pueden cachearse en memoria por unos minutos. `/documents` y `/search` cambian más rápido — no cachees agresivamente.
-7. **Paginación**. Recuerda: no hay `total`. Implementa "Cargar más" en vez de paginador numérico, o calcula manualmente con un round-trip extra.
-8. **URLs canónicas**. Considera que cada vista tenga estado URL-shareable: `/search?q=...&municipality=...` y `/documents?year=2025&offset=20` — esto te da deep-links gratis para probar.
-
----
-
-## 7. Pantallas mínimas sugeridas para validar todo
-
-Para un frontend de pruebas no necesitas diseño — sólo necesitas estas 6 pantallas con las llamadas correctas:
-
-| Pantalla             | Endpoints que dispara                                 |
-| -------------------- | ----------------------------------------------------- |
-| Home / status        | `GET /health`, `GET /sources`                         |
-| Lista de fuentes     | `GET /sources?include_inactive=...`                   |
-| Detalle de fuente    | `GET /sources/{slug}`, `GET /documents?source_id=...` |
-| Lista de documentos  | `GET /documents` con filtros y paginación             |
-| Detalle de documento | `GET /documents/{id}`, `GET /documents/{id}/chunks`   |
-| Búsqueda             | `POST /search` (o `GET /search` con URL state)        |
-| Manifests            | `GET /manifests` (opcional con `source_slug`)         |
-
-Con esas 6 pantallas tocas el 100% de los endpoints expuestos hoy y puedes detectar regresiones de contrato apenas el backend cambie un campo.
-
----
-
-## 8. Qué NO está expuesto al frontend (importante)
-
-Estos casos requieren backend (CLI) o trabajo adicional — el frontend no debería intentar hacerlos:
-
-- **Ingestar documentos** (`odj ingest`, `odj discovered ingest`). No hay endpoint HTTP; corre por CLI desde un operador.
-- **Descargar el blob original** desde el storage interno. El frontend debe usar `official_url` (que apunta al portal público de la fuente). No hay `GET /documents/{id}/raw` ni equivalente.
-- **Procesar / re-procesar** documentos (`odj process`). Sin endpoint.
-- **Descubrir candidatos** (`odj sapumu scan`, `odj discovered inspect`). Sin endpoint — son herramientas de operador.
-- **Generar manifests** (`odj manifest`). Sin endpoint — se generan por CLI y el frontend sólo los lista.
-
-Si en algún punto necesitas alguna de estas operaciones desde la UI, se agregan como rutas nuevas en `api/routers/` — pero hoy no existen y el frontend no debe asumirlas.
-
----
-
-## 9. Cambios futuros previsibles (heads-up al equipo de frontend)
-
-Para que el cliente HTTP no te sorprenda:
-
-- **Paginación con total**: el backend no devuelve `total` hoy. Si lo necesitas para mostrar "página 3 de 17", solicita agregar `X-Total-Count` o un wrapper `{ items, total, limit, offset }`.
-- **Autenticación**: no existe. Si se agrega, será probablemente `Authorization: Bearer <jwt>` — diseña tu cliente con un slot para inyectar ese header desde el inicio.
-- **Embedding provider**: el campo `embedding_provider` en `/search` te dice si estás en `"dummy"` (local), `"local_st"` (sentence-transformers) o algo real. El frontend puede mostrar un banner "Búsqueda en modo demo" cuando sea `"dummy"`.
-
----
-
-## 10. Receta concreta para React + Vite
-
-Esta sección NO reemplaza las anteriores — es el "kit de arranque" para el caso que más usamos en dev.
-
-### 10.1 Arrancar todo en orden
-
-En dos terminales separadas:
+**Respuesta `200`** — [`SearchResponse`](#searchresponse)
 
 ```bash
-# Terminal 1 — API (puerto 8000). El --reload se reinicia solo al guardar.
-make api
-# equivalente literal:
-# uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .
-
-# Terminal 2 — frontend Vite (puerto 5173 por default)
-cd <tu-carpeta-de-front>
-npm run dev
+# local_only=true por defecto; pasa false para incluir material estatal/federal
+curl -s "http://localhost:8000/search?q=presupuesto%20municipal&limit=5" | jq
 ```
 
-Verificá que la API responde antes de pelearte con el front:
+---
+
+### `POST /semantic-search`
+
+Ruta semántica explícita. **Actualmente equivalente a `POST /search`** (mismo body, misma
+respuesta). Existe para dejar espacio a futuras variantes de búsqueda (ej. híbrida
+keyword+vector) sin romper `/search`.
+
+**Request body** — [`SearchRequest`](#searchrequest)
+**Respuesta `200`** — [`SearchResponse`](#searchresponse)
+
+---
+
+### `GET /manifests`
+
+Lista los manifiestos de integridad escritos bajo `MANIFESTS_DIR`. Cada manifiesto es un
+snapshot point-in-time generado por `odj manifest` (no se actualiza solo — si las cifras
+se ven viejas, regenera con `make manifest SOURCE=tala`).
+
+**Query params**
+
+| Param | Tipo | Default | Descripción |
+|---|---|---|---|
+| `source_slug` | string | `null` | Filtra por slug de fuente. |
+
+**Respuesta `200`** — `list[`[`ManifestSummary`](#manifestsummary)`]`
 
 ```bash
-curl http://localhost:8000/health
-# → {"status":"ok","version":"0.1.0","environment":"local"}
+curl -s "http://localhost:8000/manifests?source_slug=tala" | jq
 ```
 
-### 10.2 Variable de entorno en Vite
+---
 
-En la raíz del front, `.env.development`:
+### `POST /ask`
+
+Agente de respuestas. Recibe una pregunta en lenguaje natural; internamente busca
+en los documentos del municipio (con la misma búsqueda semántica + reranking +
+`local_only`), razona, vuelve a buscar si hace falta, y responde citando los
+documentos que usó.
+
+**Deshabilitado por defecto.** Sólo responde si el operador configuró `LLM_API_KEY`.
+Si no, devuelve `503`. El agente habla la API OpenAI Chat Completions, así que el
+operador puede usar **cualquier** proveedor/modelo compatible (Gemini, OpenAI, Groq,
+local…) vía `LLM_API_BASE` / `LLM_MODEL`.
+
+La configuración operativa vive en `.env` del backend:
+
+| Variable | Efecto |
+|---|---|
+| `LLM_API_KEY` | Enciende el agente. Sin valor, `/ask` devuelve `503` y el resto de la API sigue disponible. |
+| `LLM_PROVIDER`, `LLM_API_BASE`, `LLM_MODEL` | Seleccionan proveedor OpenAI-compatible, endpoint y modelo. |
+| `LLM_ROUTER_MODEL` | Opcional. Clasifica saludos/fuera-de-tema antes del loop caro; si responde ahí, `iterations` puede ser `0`. |
+| `LLM_MAX_ITERS` | Máximo de vueltas de razonamiento/búsqueda con `search_documents` antes de forzar respuesta final. Default `5`. |
+| `LLM_TIMEOUT_SECONDS` | Timeout de cada llamada HTTP al proveedor LLM. Default `60`; no es un límite total del endpoint. |
+| `LLM_TEMPERATURE` | Temperatura enviada al proveedor. Default `0.2`. |
+
+Después de editar `.env`, reinicia la API para asegurar que `pydantic-settings` y
+las dependencias cacheadas tomen los nuevos valores.
+
+**Request body**
+
+| Campo | Tipo | Rango | Descripción |
+|---|---|---|---|
+| `question` | string | `≥ 3` chars | Pregunta en lenguaje natural. |
+| `mode` | `ciudadano` \| `investigador` | — | Estilo de respuesta. `ciudadano` (default) prioriza claridad y acciones; `investigador` agrega más detalle técnico y trazabilidad. |
+| `history` | `{ question, answer }[]` | — | Turnos previos que el cliente quiere replayar para contexto. El servidor no persiste conversaciones; si se omite, la pregunta es de un solo turno. |
+
+**Respuesta `200`** — [`AskResponse`](#askresponse)
+**Respuesta `502`** — `{ "detail": "Upstream LLM error: ..." }`
+**Respuesta `503`** — `{ "detail": "Agent not configured. Set LLM_API_KEY..." }`
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-Para producción, `.env.production`:
-
-```bash
-VITE_API_BASE_URL=https://api.odj.example.com
-```
-
-Vite expone `import.meta.env.VITE_API_BASE_URL` (sólo las que empiezan con `VITE_`).
-
-### 10.3 Tipos TypeScript del API
-
-Pegá esto en `src/api/types.ts` — son los Pydantic schemas reales del backend (`api/schemas.py`):
-
-```ts
-export type ProcessingStatus =
-  | "pending"
-  | "extracted"
-  | "chunked"
-  | "indexed"
-  | "failed"
-  | "needs_ocr";
-
-export type DocumentType =
-  | "contract"
-  | "bidding"
-  | "award"
-  | "regulation"
-  | "minutes"
-  | "budget"
-  | "financial_report"
-  | "other"
-  | "unknown";
-
-export interface SourceOut {
-  id: string;
-  slug: string;
-  name: string;
-  kind: string;
-  municipality: string;
-  official_url: string;
-  description: string | null;
-  is_active: boolean;
-}
-
-export interface DocumentOut {
-  id: string;
-  source_id: string;
-  sha256: string;
-  title: string | null;
-  document_type: DocumentType;
-  municipality: string;
-  year: number | null;
-  official_url: string;
-  captured_url: string | null;
-  captured_at: string; // ISO-8601 UTC
-  mime_type: string;
-  storage_path: string;
-  file_size: number;
-  processing_status: ProcessingStatus;
-  needs_ocr: boolean;
-  version: number;
-  is_current: boolean;
-  superseded_by: string | null;
-}
-
-export interface ChunkOut {
-  id: string;
-  document_id: string;
-  source_id: string;
-  sha256: string;
-  chunk_index: number;
-  text: string;
-  char_count: number;
-  page_start: number | null;
-  page_end: number | null;
-  section_title: string | null;
-  document_type: DocumentType;
-  municipality: string;
-  year: number | null;
-}
-
-export interface SearchHit {
-  score: number; // 0–1, mayor = mejor
-  chunk: ChunkOut;
-  document: DocumentOut;
-}
-
-export interface SearchResponse {
-  query: string;
-  embedding_provider: string; // "dummy" | "local_st" | ...
-  embedding_model: string;
-  embedding_dimension: number;
-  hits: SearchHit[];
-}
-
-export interface SearchRequest {
-  q: string;
-  limit?: number; // 1–50, default 10
-  municipality?: string | null;
-  document_type?: DocumentType | null;
-  source_id?: string | null; // UUID
-}
-
-export interface ApiError {
-  status: number;
-  message: string;
-  fieldErrors?: Array<{ loc: string[]; msg: string }>;
-}
-```
-
-### 10.4 Cliente HTTP mínimo (sin dependencias extras)
-
-`src/api/client.ts`:
-
-```ts
-import type {
-  ApiError,
-  DocumentOut,
-  SearchRequest,
-  SearchResponse,
-  SourceOut,
-} from "./types";
-
-const BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    const err: ApiError = {
-      status: res.status,
-      message:
-        typeof body.detail === "string" ? body.detail : "Validation error",
-      fieldErrors: Array.isArray(body.detail) ? body.detail : undefined,
-    };
-    throw err;
-  }
-  return res.json();
-}
-
-export const api = {
-  health: () => request<{ status: string; version: string }>("/health"),
-
-  listSources: (includeInactive = false) =>
-    request<SourceOut[]>(
-      `/sources${includeInactive ? "?include_inactive=true" : ""}`,
-    ),
-
-  listDocuments: (
-    params: {
-      limit?: number;
-      offset?: number;
-      municipality?: string;
-      year?: number;
-    } = {},
-  ) => {
-    const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) q.set(k, String(v));
-    }
-    return request<DocumentOut[]>(`/documents?${q.toString()}`);
-  },
-
-  search: (body: SearchRequest) =>
-    request<SearchResponse>("/search", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-};
-```
-
-### 10.5 Hook de búsqueda con cancelación
-
-`src/hooks/useSearch.ts`:
-
-```ts
-import { useEffect, useState } from "react";
-import { api } from "../api/client";
-import type { ApiError, SearchResponse } from "../api/types";
-
-export function useSearch(query: string, limit = 10) {
-  const [data, setData] = useState<SearchResponse | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) {
-      setData(null);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    const t = setTimeout(() => {
-      api
-        .search({ q, limit })
-        .then((r) => {
-          if (!cancelled) setData(r);
-        })
-        .catch((e) => {
-          if (!cancelled) setError(e);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    }, 300); // debounce 300ms
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, limit]);
-
-  return { data, error, loading };
-}
-```
-
-### 10.6 Componente de resultados
-
-`src/components/SearchResults.tsx`:
-
-```tsx
-import type { SearchHit } from "../api/types";
-
-export function SearchResults({ hits }: { hits: SearchHit[] }) {
-  if (hits.length === 0) {
-    return <p>Sin resultados. Probá otra consulta.</p>;
-  }
-  return (
-    <ul className="search-results">
-      {hits.map((hit) => (
-        <li key={hit.chunk.id}>
-          <header>
-            <strong>{hit.document.title ?? "(sin título)"}</strong>
-            <span> · score {hit.score.toFixed(3)}</span>
-            {hit.chunk.page_start != null && (
-              <span>
-                {" "}
-                · pág. {hit.chunk.page_start}
-                {hit.chunk.page_end !== hit.chunk.page_start &&
-                  `–${hit.chunk.page_end}`}
-              </span>
-            )}
-          </header>
-          <p>
-            {hit.chunk.text.slice(0, 280)}
-            {hit.chunk.text.length > 280 ? "…" : ""}
-          </p>
-          <a
-            href={hit.document.official_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Abrir PDF original ↗
-          </a>
-        </li>
-      ))}
-    </ul>
-  );
-}
-```
-
-### 10.7 Si tu front sigue rompiendo con CORS
-
-Si después de levantar la API con CORS configurado seguís viendo error en el browser, chequeá en orden:
-
-1. **El origin del front es el que el backend espera.** Abrí DevTools → Network → la request bloqueada → mirá el header `Origin` que envía el browser. Tiene que estar en `CORS_ORIGINS` del backend. Vite a veces arranca en `:5174` si `:5173` está ocupado.
-2. **El backend NO se reinició** después de cambiar `.env`. `--reload` sólo escucha cambios en `.py`, no en `.env`. Mata el proceso y volvé a correr `make api`.
-3. **Estás haciendo `fetch` a `0.0.0.0:8000`** (no, el browser no acepta eso). Usá `localhost:8000` o `127.0.0.1:8000`.
-4. **Alternativa sin tocar nada**: el proxy de Vite. En `vite.config.ts`:
-   ```ts
-   server: {
-     proxy: {
-       "/api": { target: "http://localhost:8000", changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, "") },
-     },
-   },
-   ```
-   Y tu front llama a `/api/search` sin cross-origin. Útil si tenés un proxy en prod y querés mismo shape en dev.
-
-### 10.8 Debug del lado del backend
-
-Si la API parece "responder vacío" pero hay docs en la DB:
-
-```bash
-# 1) Verificar que SÍ hay indexed
-uv run open-data-jalisco db stats
-
-# 2) Probar el endpoint directo (sin browser, sin CORS)
-curl -s -X POST http://localhost:8000/search \
+curl -s -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{"q":"comité de transparencia tala","limit":3}' | jq .
-
-# 3) Si la API responde con hits pero el front muestra vacío, es bug del front.
-#    Si la API también devuelve `hits: []`, mirá embedding_provider — si dice
-#    "dummy" tu .env apunta al provider tonto y por eso no encuentra nada.
+  -d '{"question": "¿Y en Tequila?", "mode": "ciudadano", "history": [{"question": "¿Qué requisitos piden para una licencia de construcción en Tala?", "answer": "En Tala se encontró…"}]}' | jq
 ```
-
----
-
-## 11. Agente conversacional (`POST /ask`)
-
-Guía sin código de implementación: contrato, comportamiento, estados de UI y los detalles que el frontend necesita conocer para integrar el agente.
-
-### 11.1 Qué es y cuándo usarlo (vs `/search`)
-
-Son dos cosas distintas y conviene ofrecer ambas:
-
-|                      | `POST /search`                           | `POST /ask`                                               |
-| -------------------- | ---------------------------------------- | --------------------------------------------------------- |
-| Devuelve             | Lista de **fragmentos crudos** rankeados | Una **respuesta redactada** + fuentes citadas             |
-| Quién lee/interpreta | El usuario                               | El agente lee por el usuario y resume                     |
-| Latencia             | ~0.5–3 s                                 | **~5–30 s o más** (varias búsquedas + llamadas al modelo) |
-| Buen caso de uso     | "Quiero ver los documentos sobre X"      | "¿Cuánto cuesta el trámite Y?", "¿Qué necesito para Z?"   |
-| Requiere             | Nada                                     | `LLM_API_KEY` en el backend                               |
-
-Recomendación de UX: una sola caja de búsqueda con dos modos/botones — **"Ver documentos"** (`/search`) y **"Preguntar"** (`/ask`) — o una pestaña "Asistente" separada. No reemplaces la búsqueda por el agente: la búsqueda es rápida y siempre disponible; el agente es más lento y opcional.
-
-### 11.2 Contrato
-
-**Request** (`application/json`):
-
-| Campo      | Tipo   | Requerido | Notas                                                             |
-| ---------- | ------ | --------- | ----------------------------------------------------------------- |
-| `question` | string | sí        | Pregunta en lenguaje natural. Mínimo 3 caracteres (si no, `422`). |
-
-**Response `200`** (`AskResponse`):
-
-| Campo        | Tipo   | Significado                                                                                                  |
-| ------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
-| `answer`     | string | Respuesta redactada en español, citando documentos por su título.                                            |
-| `model`      | string | Modelo LLM que respondió (ej. `gemini-2.5-pro`). Útil para mostrar "Generado por…".                          |
-| `iterations` | int    | Cuántas vueltas de búsqueda/razonamiento tomó (1 = respondió a la primera). Informativo.                     |
-| `sources`    | array  | Documentos que el agente consultó. Ver tabla siguiente. Puede venir vacío si respondió sin necesitar buscar. |
-
-Cada objeto en `sources` (`AskSource`):
-
-| Campo          | Tipo           | Uso en UI                                                           |
-| -------------- | -------------- | ------------------------------------------------------------------- |
-| `title`        | string \| null | Título del documento. Si es `null`, mostrar "Documento sin título". |
-| `url`          | string         | URL oficial del PDF. Hacer la card **clickable** a este enlace.     |
-| `page_start`   | int \| null    | Página del fragmento citado. Mostrar "pág. 12" si no es `null`.     |
-| `page_end`     | int \| null    | Última página del fragmento.                                        |
-| `jurisdiction` | string         | `municipal` / `state` / `federal` / `unknown`. Badge opcional.      |
-
-Ejemplo de respuesta (contrato, no código de front):
 
 ```json
 {
-  "answer": "Para una licencia de construcción necesitas presentar… (según el Reglamento de construcción municipal).",
+  "answer": "Para una licencia de construcción necesitas… (según el Reglamento de construcción municipal).",
   "model": "gemini-2.5-pro",
+  "mode": "ciudadano",
   "iterations": 2,
   "sources": [
     {
       "title": "Reglamento de construcción municipal",
+      "inferred_title": "Reglamento municipal de construcción",
       "url": "https://…",
       "page_start": 12,
       "page_end": 12,
-      "jurisdiction": "municipal"
+      "jurisdiction": "municipal",
+      "excerpt": "Artículo 24. Para obtener la licencia de construcción el solicitante deberá presentar…"
     }
   ]
 }
 ```
 
-Llamada de referencia para probar el endpoint:
+> El agente sólo ve el corpus a través de la herramienta de búsqueda y se le
+> instruye a no inventar: si no hay evidencia, lo dice. `iterations` es cuántas
+> vueltas de razonamiento/búsqueda tomó (acotado por `LLM_MAX_ITERS`).
+> Cada iteración puede hacer una llamada al modelo y una o más búsquedas
+> documentales. Si se agota `LLM_MAX_ITERS`, el backend hace una llamada final sin
+> herramientas para obligar una respuesta con lo ya consultado. El timeout
+> `LLM_TIMEOUT_SECONDS` aplica por llamada al proveedor; el cliente debe usar un
+> timeout mayor que una sola llamada (el portal usa 180 s).
+
+---
+
+## Esquemas
+
+### `SourceOut`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | UUID | |
+| `slug` | string | Identificador estable (ej. `tala`). |
+| `name` | string | Nombre legible. |
+| `kind` | string | [`SourceKind`](#sourcekind-kind). |
+| `municipality` | string | |
+| `official_url` | string | URL del portal oficial. |
+| `description` | string \| null | |
+| `is_active` | bool | |
+
+### `DocumentOut`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | UUID | |
+| `source_id` | UUID | |
+| `sha256` | string (64 hex) | Hash del binario. PDFs idénticos comparten sha256. |
+| `title` | string \| null | Derivado del nombre de archivo; **poco confiable**. |
+| `inferred_title` | string \| null | Título legible derivado del **contenido** (LLM). `null` hasta correr `infer-titles`. Prefiérelo para mostrar. |
+| `document_type` | string | [`DocumentType`](#documenttype-document_type). |
+| `municipality` | string | |
+| `year` | int \| null | |
+| `official_url` | string | URL canónica del documento. |
+| `captured_url` | string \| null | URL exacta desde donde se descargó. |
+| `captured_at` | datetime | ISO-8601 UTC. |
+| `mime_type` | string | Ej. `application/pdf`. |
+| `storage_path` | string | Ruta interna del binario crudo. |
+| `file_size` | int | Bytes. |
+| `processing_status` | string | [`ProcessingStatus`](#processingstatus-processing_status). |
+| `needs_ocr` | bool | `true` si el PDF es imagen sin capa de texto. |
+| `version` | int | Versión del documento (≥ 1). |
+| `is_current` | bool | `false` si fue reemplazado. |
+| `superseded_by` | UUID \| null | Documento que lo reemplaza, si aplica. |
+| `jurisdiction` | string | Nivel de gobierno inferido del título: `municipal`, `state`, `federal`, `unknown`. Heurística — ver [calidad de búsqueda](#calidad-de-búsqueda-reranking-y-jurisdicción). |
+
+### `ChunkOut`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | UUID | |
+| `document_id` | UUID | Documento padre. |
+| `source_id` | UUID | |
+| `sha256` | string | sha256 del documento padre (usado para dedup). |
+| `chunk_index` | int | Orden dentro del documento (0-based). |
+| `text` | string | Texto del fragmento. |
+| `char_count` | int | Longitud en caracteres. |
+| `page_start` | int \| null | Primera página del fragmento (1-based). |
+| `page_end` | int \| null | Última página del fragmento. |
+| `section_title` | string \| null | Encabezado de sección si se detectó. |
+| `document_type` | string | Heredado del documento. |
+| `municipality` | string | Heredado del documento. |
+| `year` | int \| null | Heredado del documento. |
+
+### `SearchRequest`
+
+Ver [`POST /search`](#post-search).
+
+### `SearchHit`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `score` | float | Similitud coseno `[0, 1]`, mayor = más relevante. Ver [interpretación](#cómo-interpretar-score). |
+| `rerank_score` | float \| null | Score del cross-encoder; presente sólo si hubo reranking. Logit sin acotar, comparable sólo dentro de una misma respuesta. Cuando está presente, los hits van ordenados por él (no por `score`). |
+| `chunk` | [`ChunkOut`](#chunkout) | El fragmento que hizo match. |
+| `document` | [`DocumentOut`](#documentout) | El documento padre. |
+
+### `SearchResponse`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `query` | string | La query recibida (echo). |
+| `embedding_provider` | string | `dummy` o `local_st`. |
+| `embedding_model` | string | Ej. `intfloat/multilingual-e5-small`. |
+| `embedding_dimension` | int | Ej. `384`. |
+| `reranker` | string \| null | Nombre del modelo de reranking si se aplicó, si no `null`. |
+| `hits` | [`SearchHit`](#searchhit)[] | Deduplicados por `sha256`. Ordenados por `rerank_score` si hubo reranking, si no por `score`. |
+
+> Si `embedding_provider` es `dummy`, los resultados **no son semánticamente útiles** (el
+> embedder de prueba devuelve vectores deterministas sin significado). En prod debe ser
+> `local_st`.
+
+### `StatsResponse`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `documents_total` | int | Solo `is_current = true`. |
+| `documents_by_status` | `{ status, count }[]` | Conteo por `processing_status`. |
+| `chunks_total` | int | Total de chunks. |
+| `unique_documents_by_sha256` | int | sha256 distintos entre chunks. |
+| `sources_total` | int | Número de fuentes. |
+| `documents_by_source` | `{ slug, count }[]` | Conteo por fuente. |
+
+### `ManifestSummary`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `filename` | string | Nombre del archivo JSON. |
+| `source_slug` | string | |
+| `municipality` | string \| null | |
+| `generated_at` | string \| null | |
+| `document_count` | int \| null | Documentos al momento del snapshot. |
+| `pipeline_version` | string \| null | |
+
+### `AskResponse`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `answer` | string | Respuesta en prosa, citando documentos. |
+| `model` | string | Modelo LLM usado (ej. `gemini-2.5-pro`). |
+| `mode` | string | Estilo aplicado: `ciudadano` o `investigador`. |
+| `iterations` | int | Vueltas de búsqueda/razonamiento que tomó. |
+| `sources` | `AskSource[]` | Documentos consultados (dedup por URL). |
+
+### `AskHistoryTurn`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `question` | string | Pregunta previa enviada por el usuario. |
+| `answer` | string | Respuesta previa mostrada por el asistente. |
+
+El historial es opcional y vive en el cliente. El backend sólo recibe los turnos que el frontend decide enviar y el agente usa los últimos turnos para resolver repreguntas; no hay almacenamiento server-side de chats.
+
+### `AskSource`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `title` | string \| null | Derivado del nombre de archivo; poco confiable. |
+| `inferred_title` | string \| null | Título legible derivado del contenido. Prefiérelo para mostrar. |
+| `url` | string | URL oficial. |
+| `page_start` | int \| null | Página del fragmento citado. |
+| `page_end` | int \| null | |
+| `jurisdiction` | string | `municipal`/`state`/`federal`/`unknown`. |
+| `excerpt` | string | Cita textual exacta en que se apoya la fuente (≤300 car.). El título sale del nombre de archivo y es poco confiable; **verifica contra el `excerpt`, no contra el título**. |
+
+---
+
+## OpenAPI / Swagger
+
+FastAPI genera documentación interactiva automáticamente:
+
+| Recurso | Ruta |
+|---|---|
+| Swagger UI | `GET /docs` |
+| ReDoc | `GET /redoc` |
+| Esquema OpenAPI (JSON) | `GET /openapi.json` |
+
+El `openapi.json` es la fuente de verdad de la máquina — úsalo para generar clientes
+tipados (ej. `openapi-typescript`). Este documento es la versión legible para humanos.
+
+---
+
+## Recetas
+
+### Levantar la API en local
 
 ```bash
-curl -s -X POST http://localhost:8000/ask -H "Content-Type: application/json" \
-  -d '{"question":"¿Qué requisitos piden para una licencia de construcción?"}' | jq .
+make api
+# equivalente literal:
+# uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000 --app-dir .
 ```
 
-### 11.3 Estados de UI que SÍ o SÍ hay que manejar
+Requiere PostgreSQL con pgvector y la DB poblada. Para resultados semánticos reales,
+exporta antes:
 
-1. **Latencia alta (lo más importante).** El agente hace varias búsquedas y una o más llamadas a un modelo remoto. Espera **5–30 s, a veces más**. No es como `/search`.
-   - Muestra un indicador de progreso con texto tranquilizador ("Buscando en los documentos del municipio…"), idealmente rotando el mensaje cada pocos segundos para que no parezca colgado.
-   - Pon un **timeout de cliente generoso**: igual o mayor a `LLM_TIMEOUT_SECONDS` del backend (por defecto 120 s). Un timeout corto (5–10 s) cortará respuestas válidas.
-   - No bloquees toda la UI: deja al usuario cancelar o seguir navegando.
+```bash
+export EMBEDDING_PROVIDER=local_st
+export EMBEDDING_MODEL=intfloat/multilingual-e5-small
+```
 
-2. **Agente apagado → `503`.** Si el backend no tiene `LLM_API_KEY`, `/ask` responde `503` con `{ "detail": "Agent not configured. Set LLM_API_KEY…" }`.
-   - El frontend debe **degradar con elegancia**: ocultar o deshabilitar la función "Preguntar" y, si acaso, mostrar "El asistente no está disponible en esta instancia". La búsqueda (`/search`) sigue funcionando normal.
-   - No hay endpoint de "capabilities": la forma de saberlo es recibir un `503` (ver §11.4).
+### Flujo típico de un frontend de búsqueda
 
-3. **Respuesta "no encontré evidencia".** El agente está instruido para decir que no hay información en vez de inventar. Eso llega como un `200` normal con un `answer` que lo explica y `sources` posiblemente vacío. **No lo trates como error** — muéstralo tal cual.
+1. `GET /stats` para las tarjetas (totales, por estado, por fuente).
+2. `POST /search` con la query del usuario → renderizar `hits`.
+3. Por cada hit, ya tienes `chunk.text`, `chunk.page_start` y `document.official_url`
+   para enlazar al PDF y señalar la página.
+4. (Opcional) `GET /documents/{id}/chunks` para mostrar el documento completo o resaltar
+   el fragmento en contexto.
 
-4. **Error del modelo / timeout / cuota → `500` o error de red.** El proveedor LLM remoto puede fallar o agotar cuota. Muestra un mensaje amable ("El asistente tuvo un problema, intenta de nuevo") y permite **reintentar**. No muestres el stack ni el detalle técnico crudo al ciudadano.
+Ver [`FRONTEND_GUIDE.md`](https://github.com/Chaetard/open-data-jalisco/blob/main/docs/FRONTEND_GUIDE.md) para el cliente TypeScript completo, tipos y
+hook de React + Vite.
 
-5. **Sin streaming (por ahora).** La respuesta llega **completa de una sola vez**, no token por token. Si quieres efecto "máquina de escribir" es puramente cosmético del front; el backend no transmite parcial todavía (ver §11.6).
+### Generar un cliente TypeScript desde el esquema
 
-### 11.4 Detectar si el agente está disponible
-
-No hay flag de capacidades. Opciones, de menos a más limpia:
-
-- **Reactiva (suficiente):** muestra el botón "Preguntar"; si la primera llamada devuelve `503`, ocúltalo y recuerda esa sesión que está apagado.
-- **Proactiva (opcional):** al cargar la app, una petición ligera a `/ask` con una pregunta trivial te dirá `200` (encendido) o `503` (apagado) — pero gasta una llamada al modelo, así que no abuses.
-
-Heads-up al equipo: si esto molesta, se puede exponer un flag (`agent_enabled`) en `/health` o `/stats` en el futuro. Hoy: `503` = apagado.
-
-### 11.5 Mostrar la respuesta y las fuentes (trazabilidad = confianza)
-
-El valor cívico del agente está en que **se puede verificar**. Reglas de presentación:
-
-- Muestra el `answer` como texto redactado, legible.
-- Debajo, lista **siempre** las `sources` como tarjetas/clickables que abren el `url` (el PDF oficial) en pestaña nueva. Incluye `title`, la página ("pág. 12") y, si quieres, el badge de `jurisdiction`.
-- Si `sources` está vacío pero hay `answer`, deja claro que es una respuesta sin documento citado (poco común; trátalo con cautela visual).
-- Opcional: muestra `model` en letra chica ("Respuesta generada por gemini-2.5-pro a partir de documentos públicos") — transparencia sobre que es IA, alineado con el principio del proyecto de IA como interfaz, no autoridad.
-
-### 11.6 Conversación de un solo turno (sin memoria)
-
-Cada `POST /ask` es **independiente**: el backend no recuerda preguntas anteriores. En la UI puedes mostrar un historial visual, pero cada pregunta se envía sola, sin contexto previo. Si el usuario hace una repregunta ("¿y para el otro trámite?"), debes reformularla completa antes de enviarla, o el agente no entenderá el "otro".
-
-Heads-up: el multi-turno (memoria de conversación) sería un cambio de backend (aceptar un historial de mensajes). No lo asumas disponible.
-
-### 11.7 Seguridad — la API key NUNCA toca el frontend
-
-La `LLM_API_KEY` vive **solo** en el backend (`.env`, gitignored). El frontend jamás la ve, ni la manda, ni la necesita: el front solo llama a **tu** `/ask`, y el backend hace la llamada al modelo con su key. No pongas claves de LLM en variables `VITE_*` ni en el bundle del cliente — quedarían expuestas a cualquiera.
-
-### 11.8 Pantalla mínima sugerida para validar
-
-Una vista "Asistente": caja de texto para la pregunta + botón "Preguntar" → estado de carga con mensaje → respuesta redactada + lista de fuentes clickables. Con eso validas el flujo completo end-to-end. Si `/ask` da `503`, esa vista debe ocultarse o mostrar el aviso de "no disponible".
+```bash
+npx openapi-typescript http://localhost:8000/openapi.json -o src/api/schema.ts
+```

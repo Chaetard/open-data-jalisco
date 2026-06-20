@@ -20,14 +20,14 @@ import {
   X,
 } from "lucide-react";
 import { api, StatsResponse } from "./api";
+import heroVideo from "./assets/video_hero.mp4";
 
 const prefersReducedMotion = () =>
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const REPO_URL = "https://github.com/Chaetard/open-data-jalisco";
-const HERO_VIDEO_URL =
-  "https://rr4---sn-hxb5j5cax-bqak.googlevideo.com/videoplayback?expire=1781920887&ei=F6A1au64IfiWsfIP1MvPsQI&ip=2806%3A3aa%3A109%3A300%3A406b%3A9e1a%3A7a39%3A4d8d&id=o-AP25nb-JytP64YYpRUJli2LJzENnF6qNw91LTb8XHfK5&itag=313&aitags=133%2C134%2C135%2C136%2C137%2C160%2C242%2C243%2C244%2C247%2C248%2C271%2C278%2C313&source=youtube&requiressl=yes&xpc=EgVo2aDSNQ%3D%3D&cps=444&gcr=mx&bui=ARmQxEVmTaPjU4OpnAn-djEH4O1grlgd_rp4i-f_RMuoXJjmcej8EAgtUyMMl3drB5es4wByJms2lbur&vprv=1&svpuc=1&mime=video%2Fwebm&ns=U0nsuoMJsQ26Of61m4-v1LEW&rqh=1&gir=yes&clen=113070589&dur=80.121&lmt=1716254546601793&keepalive=yes&lmw=1&fexp=51565115,51565682,51987687&c=TVHTML5&sefc=1&txp=531F224&n=7ZnQ1nIjT66DKA&sparams=expire%2Cei%2Cip%2Cid%2Caitags%2Csource%2Crequiressl%2Cxpc%2Cgcr%2Cbui%2Cvprv%2Csvpuc%2Cmime%2Cns%2Crqh%2Cgir%2Cclen%2Cdur%2Clmt&sig=AHEqNM4wRQIgbLrvBHJu3v5_dZmm_-bmY_owRu36aJthdh177dWD0KMCIQCVI_RO-lsapQxoQZ2TuW8iLXGaEqzGaH71C3WkwsQb5Q%3D%3D&rm=sn-opqpmoxuhm-j00e7l,sn-2imk7l&rrc=79,104&req_id=b9f097d5cb8da3ee&cmsv=e&rms=rdu,au&redirect_counter=2&cms_redirect=yes&ipbypass=yes&met=1781899303,&mh=zk&mip=2806:261:6483:9d59:b523:5d03:6e6:a9af&mm=29&mn=sn-hxb5j5cax-bqak&ms=rdu&mt=1781898788&mv=m&mvi=4&pl=53&lsparams=cps,ipbypass,met,mh,mip,mm,mn,ms,mv,mvi,pl,rms&lsig=APaTxxMwRAIgG8Ujao_KRovMWMEFvo1puzesaIqYGUs25ZWiN-6GCLkCIDaFI8TjmQFIP7ILIlThyYItn8FXPNMv05SkAnlIT-dN";
+const HERO_VIDEO_CREDIT_URL = "https://www.youtube.com/watch?v=BgztRUjJ3Oo";
 
 const endpoints: Array<{ method: "GET" | "POST"; path: string; desc: string }> = [
   { method: "GET", path: "/stats", desc: "Métricas agregadas del corpus." },
@@ -181,7 +181,7 @@ export default function Landing() {
         >
           <video
             className="hero-image absolute inset-0 h-full w-full object-cover"
-            src={HERO_VIDEO_URL}
+            src={heroVideo}
             autoPlay
             muted
             loop
@@ -196,15 +196,16 @@ export default function Landing() {
         <div className="hero-atmosphere pointer-events-none absolute inset-0" aria-hidden />
 
         <a
-          href="https://www.youtube.com/watch?v=BgztRUjJ3Oo"
+          href={HERO_VIDEO_CREDIT_URL}
           target="_blank"
           rel="noreferrer"
-          className="hero-credit group absolute z-10 inline-flex h-8 min-w-8 items-center justify-center overflow-hidden rounded-full border border-white/16 bg-[#101814]/42 px-2.5 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-white/72 backdrop-blur transition-all duration-300 hover:w-[13.5rem] hover:border-white/30 hover:bg-[#101814]/64 hover:text-white focus-visible:w-[13.5rem] focus-visible:border-white/30 focus-visible:bg-[#101814]/64 focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/28"
-          aria-label="Video de fondo por EDavidM en YouTube"
+          aria-label="Créditos del video de fondo"
+          title="Créditos del video de fondo"
+          className="hero-credit group absolute z-40 inline-flex h-9 min-w-9 items-center justify-center overflow-hidden rounded-full border border-white/30 bg-[#101814]/62 px-3 font-mono text-[12px] font-semibold text-white shadow-[0_10px_30px_rgba(0,0,0,0.28)] backdrop-blur transition-all duration-300 hover:w-[12.75rem] hover:border-white/45 hover:bg-[#101814]/78 focus-visible:w-[12.75rem] focus-visible:border-white/45 focus-visible:bg-[#101814]/78 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
         >
-          <span className="shrink-0">!</span>
-          <span className="ml-2 hidden whitespace-nowrap group-hover:inline group-focus-visible:inline">
-            Video: EDavidM / YouTube
+          <span className="shrink-0 leading-none">i</span>
+          <span className="ml-2 hidden whitespace-nowrap text-[10px] uppercase tracking-[0.12em] text-white/86 group-hover:inline group-focus-visible:inline">
+            Video: YouTube
           </span>
         </a>
 
@@ -343,6 +344,12 @@ export default function Landing() {
               La ausencia de un documento en la base no significa que no exista. Una inconsistencia
               detectada no significa, por sí misma, una irregularidad legal.
             </p>
+            <Link
+              to="/pnt"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand transition hover:text-ink"
+            >
+              Ver guía para solicitarlo en la PNT <ArrowRight className="h-4 w-4" />
+            </Link>
           </article>
         </div>
       </section>
@@ -358,12 +365,12 @@ export default function Landing() {
               REST sobre FastAPI, sólo lectura, sin llaves
             </h2>
             <p className="mt-4 text-[15px] leading-7 text-muted">
-              Endpoints JSON sin autenticación, documentados con OpenAPI (
-              <code className="rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">/docs</code> y{" "}
+              Endpoints JSON sin autenticación, documentados con OpenAPI detrás del portal en{" "}
+              <code className="rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">/api/docs</code> y{" "}
               <code className="rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">
-                /openapi.json
+                /api/openapi.json
               </code>
-              ). La búsqueda corre sobre embeddings multilingües (
+              . En desarrollo directo también existen en el puerto 8000. La búsqueda corre sobre embeddings multilingües (
               <code className="rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">
                 multilingual-e5-small
               </code>
@@ -371,9 +378,9 @@ export default function Landing() {
             </p>
 
             <div className="mt-6">
-              <CodeBlock>{`curl -X POST http://localhost:8000/search \\
+              <CodeBlock>{`curl -X POST http://localhost/api/search \\
   -H "Content-Type: application/json" \\
-  -d '{"q":"presupuesto municipal","limit":5}'`}</CodeBlock>
+  -d '{"q":"presupuesto municipal","limit":5,"local_only":true}'`}</CodeBlock>
             </div>
 
             <Link
@@ -475,13 +482,14 @@ export default function Landing() {
             </p>
             <h2 className="mt-4 font-display text-[2rem] font-medium leading-tight tracking-tight">
               <Terminal className="mr-2 inline h-7 w-7 -translate-y-0.5 text-brand" />
-              Clónalo, audítalo, levántalo
+              Audítalo, levántalo y extiéndelo
             </h2>
             <p className="mt-4 text-[15px] leading-7 text-muted">
               Backend en Python 3.12 (FastAPI + Typer) sobre PostgreSQL con pgvector, gestionado con
               <code className="mx-1 rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">uv</code>;
-              frontend en React + Vite. El setup completo —base de datos, variables de entorno y
-              embeddings— está documentado paso a paso en el README del repositorio.
+              frontend en React + Vite servido por Caddy con proxy a
+              <code className="mx-1 rounded bg-paper px-1.5 py-0.5 font-mono text-[0.85em]">/api</code>.
+              Docker levanta el stack completo; en desarrollo, Vite usa el mismo prefijo mediante proxy.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <a
@@ -505,14 +513,19 @@ export default function Landing() {
           </div>
 
           <div data-enter className="lg:pt-1">
-            <CodeBlock>{`# Clona el repositorio
-git clone ${REPO_URL}.git
-cd open-data-jalisco
+            <CodeBlock>{`# Stack completo desde un checkout del repo
+cp .env.example .env
+docker compose up -d --build
 
-# Sigue la "Sección técnica" del README:
-#   · Postgres + pgvector   make db-up
-#   · entorno y deps        uv sync --extra dev
-#   · API y frontend        make api  ·  npm run dev`}</CodeBlock>
+# Desarrollo local: API + SPA
+make db-up
+uv sync --extra dev
+make init-db
+make api
+
+cd web
+npm ci
+npm run dev`}</CodeBlock>
           </div>
         </div>
       </section>
@@ -530,6 +543,12 @@ cd open-data-jalisco
               Lee los documentos por ti, los resume y cita la evidencia; si no la encuentra, lo dice.
               La fuente de verdad siempre es el documento original, no el modelo.
             </p>
+            <Link
+              to="/pnt"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand transition hover:text-ink"
+            >
+              Solicitar documentos faltantes <ArrowRight className="h-4 w-4" />
+            </Link>
           </article>
           <article data-enter className="rounded-card border border-line bg-surface p-7">
             <span className="grid h-10 w-10 place-items-center rounded-lg bg-brand-soft text-brand">
@@ -567,8 +586,8 @@ cd open-data-jalisco
                 Empieza a explorar el corpus
               </h2>
               <p className="mt-3 text-[15px] leading-7 text-muted">
-                Busca por contenido, pregúntale al asistente o contribuye en GitHub para sumar tu
-                municipio.
+                Busca por contenido, pregúntale al asistente o usa la guía PNT cuando necesites
+                pedir un documento que no aparece en el corpus.
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
@@ -588,6 +607,13 @@ cd open-data-jalisco
                 <Github className="h-4 w-4" />
                 Contribuir
               </a>
+              <Link
+                to="/pnt"
+                className="inline-flex h-12 items-center gap-2 rounded-xl border border-line-strong bg-paper px-6 text-sm font-semibold text-ink transition hover:bg-surface"
+              >
+                <ScrollText className="h-4 w-4" />
+                Guía PNT
+              </Link>
             </div>
           </div>
 

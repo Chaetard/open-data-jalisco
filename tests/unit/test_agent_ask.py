@@ -32,8 +32,15 @@ class RecordingSearch:
         self._hits = hits
         self.queries: list[tuple] = []
 
-    def __call__(self, query: str, local_only: bool, limit: int) -> list[SearchHit]:
-        self.queries.append((query, local_only, limit))
+    def __call__(
+        self,
+        query: str,
+        local_only: bool = True,
+        limit: int = 6,
+        municipality: str | None = None,
+        year: int | None = None,
+    ) -> list[SearchHit]:
+        self.queries.append((query, local_only, limit, municipality, year))
         return self._hits
 
 
@@ -163,6 +170,142 @@ def test_unknown_mode_falls_back_to_default():
     llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
     result = AskAgent(llm=llm, search=RecordingSearch([]), max_iters=3).ask("x", mode="bogus")
     assert result.mode == "ciudadano"
+
+
+def test_history_is_replayed_before_the_question():
+    llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
+    AskAgent(llm=llm, search=RecordingSearch([]), max_iters=3).ask(
+        "¿y en Tequila?",
+        history=[("¿gasto en obra?", "Fue X."), ("¿y becas?", "Fue Y.")],
+    )
+    msgs = llm.calls[0][0]
+    assert [m.role for m in msgs] == [
+        "system", "user", "assistant", "user", "assistant", "user",
+    ]
+    assert msgs[1].content == "¿gasto en obra?"
+    assert msgs[2].content == "Fue X."
+    assert msgs[-1].content == "¿y en Tequila?"
+
+
+def test_search_receives_municipality_and_year_filters():
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="search_documents",
+                        arguments='{"query":"egresos","municipality":"Tequila","year":2024}',
+                    )
+                ],
+            ),
+            ChatResult(content="ok", tool_calls=[]),
+        ]
+    )
+    search = RecordingSearch([_hit("Doc", "t")])
+    AskAgent(llm=llm, search=search, max_iters=5).ask("x")
+    query, _local, _limit, municipality, year = search.queries[0]
+    assert query == "egresos"
+    assert municipality == "Tequila"
+    assert year == 2024
+
+
+def test_corpus_overview_is_appended_to_system_prompt():
+    llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
+    AskAgent(
+        llm=llm,
+        search=RecordingSearch([]),
+        max_iters=3,
+        corpus_overview=lambda: "PANORAMA: Tequila (5)",
+    ).ask("x")
+    assert "PANORAMA: Tequila (5)" in llm.calls[0][0][0].content
+
+
+def test_corpus_overview_failure_does_not_break_ask():
+    def boom() -> str:
+        raise RuntimeError("db down")
+
+    llm = ScriptedLLM([ChatResult(content="ok", tool_calls=[])])
+    result = AskAgent(
+        llm=llm, search=RecordingSearch([]), max_iters=3, corpus_overview=boom
+    ).ask("x")
+    assert result.answer == "ok"
+
+
+def test_municipality_name_is_not_a_false_citation():
+    # A doc titled only with a municipality name must NOT count as cited just
+    # because the answer mentions that municipality — the dynamic muni stopwords
+    # strip it. A distinctively-titled doc still surfaces.
+    hits = [
+        _titled_hit("Tequila", "https://x.invalid/muni"),
+        _titled_hit("Reglamento de Construcción", "https://x.invalid/regla"),
+    ]
+    llm = ScriptedLLM(
+        [
+            _tool_call("q"),
+            ChatResult(
+                content="En Tequila, el Reglamento de Construcción pide A, B, C.",
+                tool_calls=[],
+            ),
+        ]
+    )
+    result = AskAgent(
+        llm=llm,
+        search=RecordingSearch(hits),
+        max_iters=5,
+        corpus_municipalities=lambda: frozenset({"tequila"}),
+    ).ask("requisitos")
+    urls = {s.url for s in result.sources}
+    assert urls == {"https://x.invalid/regla"}  # the bare-municipality doc dropped
+
+
+class _StubRouter:
+    def __init__(self, route):
+        self.model = "router-llm"
+        self._route = route
+
+    def classify(self, question, history=None):
+        return self._route
+
+
+def test_router_short_circuits_non_search():
+    from open_data_jalisco.agent.router import Route
+
+    llm = ScriptedLLM([])  # must never be called
+    search = RecordingSearch([])
+    result = AskAgent(
+        llm=llm,
+        search=search,
+        max_iters=5,
+        router=_StubRouter(Route("chitchat", "¡Hola! ¿Qué documento buscas?")),
+    ).ask("hola")
+
+    assert result.answer == "¡Hola! ¿Qué documento buscas?"
+    assert result.iterations == 0
+    assert result.sources == []
+    assert result.model == "router-llm"
+    assert llm.calls == []  # no expensive loop
+    assert search.queries == []  # no search
+
+
+def test_router_search_intent_runs_the_loop():
+    from open_data_jalisco.agent.router import Route
+
+    llm = ScriptedLLM(
+        [_tool_call("requisitos"), ChatResult(content="Necesitas A.", tool_calls=[])]
+    )
+    search = RecordingSearch([_hit("Reglamento", "A")])
+    result = AskAgent(
+        llm=llm,
+        search=search,
+        max_iters=5,
+        router=_StubRouter(Route("search")),
+    ).ask("¿requisitos?")
+
+    assert "Necesitas A." in result.answer
+    assert result.iterations == 2
+    assert len(search.queries) == 1
 
 
 def test_agent_caps_and_ranks_sources():

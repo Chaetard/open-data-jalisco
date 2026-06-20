@@ -21,16 +21,20 @@ from typing import Any
 from ..api.schemas import SearchHit
 from ..ports.llm import ChatMessage, LLMClient
 from ..shared.logging import get_logger
+from .router import SEARCH as ROUTER_SEARCH
+from .router import Router
 
 logger = get_logger(__name__)
 
-# (query, local_only, limit) -> hits. Injected so the agent stays decoupled
-# from the DB/embedder wiring and is trivial to fake in tests.
-SearchFn = Callable[[str, bool, int], list[SearchHit]]
+# Called with keyword args (query, local_only, limit, municipality, year) -> hits.
+# Injected so the agent stays decoupled from the DB/embedder wiring and is trivial
+# to fake in tests.
+SearchFn = Callable[..., list[SearchHit]]
 
 _CORE_RULES = (
     "Eres un asistente de transparencia que responde sobre los documentos "
-    "públicos de municipios de Jalisco (actualmente Tala y Tequila). Tu trabajo "
+    "públicos de municipios de Jalisco (los disponibles aparecen en el PANORAMA "
+    "DEL CORPUS al final de estas instrucciones). Tu trabajo "
     "es reportar lo que los documentos dicen, no juzgar a la autoridad. Cuando la "
     "pregunta no nombre un municipio, no asumas uno: si los documentos recuperados "
     "son de varios, distingue de cuál es cada hallazgo. Reglas:\n"
@@ -49,6 +53,13 @@ _CORE_RULES = (
     "los documentos recuperados», y enumera las posibles causas cuando aplique "
     "(no se desglosa a ese nivel, está agrupado en un nivel superior, el documento "
     "correcto no se consultó, etc.).\n"
+    "\n"
+    "CUANDO EL DOCUMENTO NO ESTÁ EN EL CORPUS\n"
+    "- Si tras buscar no encuentras el documento o el dato que la persona pide, "
+    "recomiéndale SIEMPRE solicitarlo por la Plataforma Nacional de Transparencia "
+    "(PNT), que es el canal oficial para pedir información pública a la autoridad.\n"
+    "- Menciona además que este panel cuenta con una guía paso a paso, fácil de "
+    "seguir, para hacer esa solicitud en la PNT.\n"
     "\n"
     "TONO — neutral, no acusatorio\n"
     "- Este es un servicio público. NO imputes irregularidades, dolo, desvío, "
@@ -128,7 +139,8 @@ _SEARCH_TOOL: dict[str, Any] = {
         "name": "search_documents",
         "description": (
             "Búsqueda híbrida (significado + texto exacto) en los documentos "
-            "públicos de los municipios de Jalisco (Tala, Tequila). Encuentra "
+            "públicos de los municipios de Jalisco disponibles (los que aparecen "
+            "en el PANORAMA DEL CORPUS). Encuentra "
             "tanto conceptos como "
             "términos literales: códigos de partida (333, 3300), fondos "
             "(FAISMUN), montos, RFC, nombres propios y artículos. Devuelve "
@@ -150,6 +162,21 @@ _SEARCH_TOOL: dict[str, Any] = {
                         "necesitas explícitamente leyes estatales o federales."
                     ),
                 },
+                "municipality": {
+                    "type": "string",
+                    "description": (
+                        "Acota a un municipio. Usa EXACTAMENTE uno de los nombres del "
+                        "PANORAMA DEL CORPUS. Omítelo para buscar en todos. Si no hay "
+                        "resultados con el filtro, vuelve a buscar sin él."
+                    ),
+                },
+                "year": {
+                    "type": "integer",
+                    "description": (
+                        "Acota a un año (p.ej. 2024). Omítelo para no filtrar por año. "
+                        "Si no hay resultados, reintenta sin el filtro."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -169,13 +196,19 @@ _EXCERPT_CHARS = 300
 # model ever cites without echoing a title token.
 _MAX_CITED = 12
 _FALLBACK_SOURCES = 5
-# Spanish function words + the ever-present municipality: too common to signal
-# that a specific document was cited.
+# Prior (question, answer) pairs replayed for follow-up context. Only the final
+# Q→A is kept (never the tool-call transcript) so tokens stay bounded.
+_HISTORY_TURNS = 3
+# Spanish function words too common to signal that a specific document was cited.
+# Municipality names are NOT listed here — they'd also be false citation signals
+# (a title "Presupuesto Tequila 2024" would "match" any answer mentioning
+# Tequila), but they're injected at runtime from the corpus so this scales to
+# whatever municipalities are ingested instead of hardcoding two.
 _STOPWORDS = frozenset(
     {
         "de", "la", "el", "los", "las", "del", "y", "en", "por", "para", "con",
-        "un", "una", "al", "lo", "su", "sus", "o", "e", "municipio", "tala",
-        "tequila", "jalisco", "documento", "documentos",
+        "un", "una", "al", "lo", "su", "sus", "o", "e", "municipio",
+        "jalisco", "documento", "documentos",
     }
 )
 
@@ -207,17 +240,60 @@ class AskResult:
 
 
 class AskAgent:
-    def __init__(self, *, llm: LLMClient, search: SearchFn, max_iters: int = 5):
+    def __init__(
+        self,
+        *,
+        llm: LLMClient,
+        search: SearchFn,
+        max_iters: int = 5,
+        corpus_overview: Callable[[], str] | None = None,
+        corpus_municipalities: Callable[[], frozenset[str]] | None = None,
+        router: Router | None = None,
+    ):
         self._llm = llm
         self._search = search
         self._max_iters = max_iters
+        # Optional cheap intent classifier. When set, greetings/off-topic skip the
+        # search loop entirely. None = always search (original behavior).
+        self._router = router
+        # Returns a compact description of what's in the corpus (municipalities,
+        # years, doc types). Appended to the system prompt so the agent scopes
+        # searches to real data instead of guessing. Cached by the caller.
+        self._corpus_overview = corpus_overview
+        # Normalized municipality-name tokens, treated as citation stopwords so a
+        # municipality in a doc title isn't mistaken for a citation. Dynamic so it
+        # scales past the two municipalities in the current beta.
+        self._corpus_municipalities = corpus_municipalities
 
-    def ask(self, question: str, *, mode: str = DEFAULT_MODE) -> AskResult:
+    def ask(
+        self,
+        question: str,
+        *,
+        mode: str = DEFAULT_MODE,
+        history: list[tuple[str, str]] | None = None,
+    ) -> AskResult:
         mode = mode if mode in _SYSTEM_PROMPTS else DEFAULT_MODE
-        messages = [
-            ChatMessage(role="system", content=_SYSTEM_PROMPTS[mode]),
-            ChatMessage(role="user", content=question),
-        ]
+
+        # Route first: a greeting or off-topic question shouldn't pay for a search
+        # loop. Only "search" falls through to the documents.
+        if self._router is not None:
+            route = self._router.classify(question, history)
+            if route.intent != ROUTER_SEARCH:
+                logger.info("ask: routed intent=%s, answered without search", route.intent)
+                return AskResult(
+                    answer=route.reply,
+                    sources=[],
+                    iterations=0,
+                    model=self._router.model,
+                    mode=mode,
+                )
+
+        messages = [ChatMessage(role="system", content=self._system_prompt(mode))]
+        # Replay prior turns so follow-ups ("¿y en Tequila?") keep context.
+        for prev_q, prev_a in (history or [])[-_HISTORY_TURNS:]:
+            messages.append(ChatMessage(role="user", content=prev_q))
+            messages.append(ChatMessage(role="assistant", content=prev_a))
+        messages.append(ChatMessage(role="user", content=question))
         # url -> (best score seen, Source). Dedupes across searches and lets us
         # keep only the most relevant few at the end.
         sources: dict[str, tuple[float, Source]] = {}
@@ -229,7 +305,7 @@ class AskAgent:
             result = self._llm.chat(messages, tools=[_SEARCH_TOOL])
             if not result.tool_calls:
                 answer = result.content or ""
-                selected = _select_sources(answer, sources)
+                selected = _select_sources(answer, sources, self._muni_stopwords())
                 logger.info(
                     "ask: answered after %d iters in %.1fs (%d cited / %d consulted)",
                     i + 1,
@@ -279,11 +355,31 @@ class AskAgent:
         answer = final.content or "No pude llegar a una respuesta con la evidencia encontrada."
         return AskResult(
             answer=answer,
-            sources=_select_sources(answer, sources),
+            sources=_select_sources(answer, sources, self._muni_stopwords()),
             iterations=self._max_iters,
             model=self._llm.model,
             mode=mode,
         )
+
+    def _muni_stopwords(self) -> frozenset[str]:
+        if self._corpus_municipalities is None:
+            return frozenset()
+        try:
+            return self._corpus_municipalities()
+        except Exception:  # best-effort; fall back to title-only stopwords
+            logger.warning("ask: corpus municipalities failed", exc_info=True)
+            return frozenset()
+
+    def _system_prompt(self, mode: str) -> str:
+        prompt = _SYSTEM_PROMPTS[mode]
+        if self._corpus_overview is None:
+            return prompt
+        try:
+            overview = self._corpus_overview()
+        except Exception:  # corpus query is best-effort; never break /ask over it
+            logger.warning("ask: corpus overview failed", exc_info=True)
+            return prompt
+        return f"{prompt}\n\n{overview}" if overview else prompt
 
     def _run_tool(self, name: str, arguments: str) -> list[SearchHit]:
         if name != "search_documents":
@@ -296,28 +392,48 @@ class AskAgent:
         if not query:
             return []
         local_only = bool(args.get("local_only", True))
+        municipality = (str(args.get("municipality")).strip() or None) if args.get("municipality") else None
+        try:
+            year = int(args["year"]) if args.get("year") is not None else None
+        except (TypeError, ValueError):
+            year = None
         # Log before the call, not just after: if search hangs (dead DB, slow
         # rerank) the "returned" line never prints, so without this a hang here
         # is invisible.
-        logger.info("ask: search q=%r local_only=%s", query, local_only)
-        hits = self._search(query, local_only, _TOOL_HIT_LIMIT)
+        logger.info(
+            "ask: search q=%r local_only=%s municipality=%s year=%s",
+            query, local_only, municipality, year,
+        )
+        hits = self._search(
+            query=query,
+            local_only=local_only,
+            limit=_TOOL_HIT_LIMIT,
+            municipality=municipality,
+            year=year,
+        )
         logger.info("ask: search returned %d hits", len(hits))
         return hits
 
 
-def _select_sources(answer: str, sources: dict[str, tuple[float, Source]]) -> list[Source]:
+def _select_sources(
+    answer: str,
+    sources: dict[str, tuple[float, Source]],
+    muni_stopwords: frozenset[str] = frozenset(),
+) -> list[Source]:
     """Keep the consulted documents the answer actually cites.
 
     Traceability fix: the final list must match the findings in the prose. A
     document counts as cited when a distinctive token of its title (a word >=4
     chars or a code like ``PE-298``/``COMUR_POA25``) appears in the answer. When
     nothing matches (model summarised without naming docs) fall back to the most
-    relevant few so the list is never empty.
+    relevant few so the list is never empty. ``muni_stopwords`` are the corpus's
+    municipality names, dropped so they don't count as citation matches.
     """
     by_score = [s for _, s in sorted(sources.values(), key=lambda p: p[0], reverse=True)]
     answer_words = set(_norm(answer).split())
     answer_codes = _codes(answer)
-    cited = [s for s in by_score if _is_cited(answer_words, answer_codes, s)]
+    stop = _STOPWORDS | muni_stopwords
+    cited = [s for s in by_score if _is_cited(answer_words, answer_codes, s, stop)]
     if cited:
         return cited[:_MAX_CITED]
     return by_score[:_FALLBACK_SOURCES]
@@ -327,12 +443,12 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
-def _title_tokens(title: str) -> set[str]:
+def _title_tokens(title: str, stopwords: frozenset[str] = _STOPWORDS) -> set[str]:
     # Distinctive words: drop stopwords and bare numbers (years collide across
     # documents); keep real words (>=4) and alphanumeric codes (poa25).
     out = set()
     for t in _norm(title).split():
-        if t in _STOPWORDS or t.isdigit():
+        if t in stopwords or t.isdigit():
             continue
         if len(t) >= 4 or any(c.isdigit() for c in t):
             out.add(t)
@@ -345,11 +461,16 @@ def _codes(text: str) -> set[str]:
     return {re.sub(r"[^a-z0-9]", "", m.lower()) for m in found}
 
 
-def _is_cited(answer_words: set[str], answer_codes: set[str], src: Source) -> bool:
+def _is_cited(
+    answer_words: set[str],
+    answer_codes: set[str],
+    src: Source,
+    stopwords: frozenset[str] = _STOPWORDS,
+) -> bool:
     for cand in (src.inferred_title, src.title):
         if not cand:
             continue
-        if _title_tokens(cand) & answer_words:
+        if _title_tokens(cand, stopwords) & answer_words:
             return True
         if _codes(cand) & answer_codes:
             return True
@@ -383,6 +504,12 @@ def _format_hits(hits: list[SearchHit]) -> str:
             "url": h.document.official_url,
             "page": h.chunk.page_start,
             "jurisdiction": h.document.jurisdiction,
+            # Relevance so the model can tell a strong hit from a weak one and
+            # decide whether to re-search. Rerank score when present (a calibrated
+            # cross-encoder logit), else the vector similarity.
+            "relevancia": round(
+                float(h.rerank_score if h.rerank_score is not None else h.score), 3
+            ),
             "text": h.chunk.text[:_SNIPPET_CHARS],
         }
         for h in hits
