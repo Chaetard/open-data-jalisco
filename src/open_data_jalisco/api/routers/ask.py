@@ -37,7 +37,9 @@ class AskRequest(BaseModel):
 
 class AskSource(BaseModel):
     title: str | None
-    # Content-derived, readable title — prefer it over `title` for display.
+    # Readable display title — prefer over `title`. The LLM content-derived one
+    # when it exists, else a deterministic (no-LLM) provisional cleaned from the
+    # filename.
     inferred_title: str | None = None
     url: str
     page_start: int | None

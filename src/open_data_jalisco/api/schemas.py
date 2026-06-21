@@ -125,7 +125,9 @@ def source_to_out(s: Source) -> SourceOut:
     )
 
 
-def document_to_out(d: Document) -> DocumentOut:
+def document_to_out(
+    d: Document, local_markers: frozenset[str] = frozenset()
+) -> DocumentOut:
     return DocumentOut(
         id=d.id,
         source_id=d.source_id,
@@ -146,7 +148,7 @@ def document_to_out(d: Document) -> DocumentOut:
         version=d.version,
         is_current=d.is_current,
         superseded_by=d.superseded_by,
-        jurisdiction=infer_jurisdiction(d.title),
+        jurisdiction=infer_jurisdiction(d.title, local_markers),
     )
 
 

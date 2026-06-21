@@ -28,6 +28,18 @@ class DocumentRepository(Protocol):
         self, source_id: UUID, official_url: str
     ) -> Document | None: ...
 
+    def find_current_by_official_url(self, official_url: str) -> Document | None: ...
+
+    def count_documents(
+        self,
+        *,
+        municipality: str | None = None,
+        year: int | None = None,
+        document_type: str | None = None,
+        processing_status: str | None = None,
+        current_only: bool = True,
+    ) -> int: ...
+
     def insert_new_version(
         self, document: Document, supersedes: Document | None
     ) -> Document: ...

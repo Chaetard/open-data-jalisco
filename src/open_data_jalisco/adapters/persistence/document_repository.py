@@ -4,7 +4,7 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...domain.document import Document
@@ -47,6 +47,46 @@ class PostgresDocumentRepository:
                 .order_by(DocumentORM.version.desc())
             )
             return document_to_domain(orm) if orm else None
+
+    def find_current_by_official_url(self, official_url: str) -> Document | None:
+        """Resolve the current document for an exact official_url (no source_id).
+
+        The answering agent only sees a hit's URL, not its source/id, so this is
+        how its read_document tool reopens a document it found.
+        """
+        with self._sf() as session:
+            orm = session.scalar(
+                select(DocumentORM)
+                .where(
+                    DocumentORM.official_url == official_url,
+                    DocumentORM.is_current.is_(True),
+                )
+                .order_by(DocumentORM.version.desc())
+            )
+            return document_to_domain(orm) if orm else None
+
+    def count_documents(
+        self,
+        *,
+        municipality: str | None = None,
+        year: int | None = None,
+        document_type: str | None = None,
+        processing_status: str | None = None,
+        current_only: bool = True,
+    ) -> int:
+        with self._sf() as session:
+            stmt = select(func.count()).select_from(DocumentORM)
+            if current_only:
+                stmt = stmt.where(DocumentORM.is_current.is_(True))
+            if municipality is not None:
+                stmt = stmt.where(DocumentORM.municipality == municipality)
+            if year is not None:
+                stmt = stmt.where(DocumentORM.year == year)
+            if document_type is not None:
+                stmt = stmt.where(DocumentORM.document_type == document_type)
+            if processing_status is not None:
+                stmt = stmt.where(DocumentORM.processing_status == processing_status)
+            return int(session.scalar(stmt) or 0)
 
     def insert_new_version(
         self, document: Document, supersedes: Document | None

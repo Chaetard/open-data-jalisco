@@ -31,6 +31,7 @@ class RecordingSearch:
     def __init__(self, hits: list[SearchHit]):
         self._hits = hits
         self.queries: list[tuple] = []
+        self.document_types: list[str | None] = []
 
     def __call__(
         self,
@@ -39,8 +40,10 @@ class RecordingSearch:
         limit: int = 6,
         municipality: str | None = None,
         year: int | None = None,
+        document_type: str | None = None,
     ) -> list[SearchHit]:
         self.queries.append((query, local_only, limit, municipality, year))
+        self.document_types.append(document_type)
         return self._hits
 
 
@@ -156,6 +159,15 @@ def test_sources_track_documents_cited_in_the_answer():
     assert "https://x.invalid/comur" not in urls  # consulted but never cited
 
 
+def test_sources_get_provisional_title_when_no_inferred():
+    # No LLM inferred_title -> the chat still shows a readable title cleaned from
+    # the cryptic filename, with NO per-doc LLM call.
+    llm = ScriptedLLM([_tool_call("q"), ChatResult(content="ok", tool_calls=[])])
+    hit = _titled_hit("POA-OBRAS-2023", "https://x.invalid/poa")
+    result = AskAgent(llm=llm, search=RecordingSearch([hit]), max_iters=5).ask("x")
+    assert result.sources[0].inferred_title == "Poa Obras 2023"
+
+
 def test_mode_selects_system_prompt():
     # The chosen mode must reach the system message and be echoed on the result.
     for mode, marker in (("ciudadano", "modo ciudadano"), ("investigador", "modo investigador")):
@@ -209,6 +221,28 @@ def test_search_receives_municipality_and_year_filters():
     assert query == "egresos"
     assert municipality == "Tequila"
     assert year == 2024
+
+
+def test_search_receives_document_type_filter():
+    # The agent can scope to a document type from the corpus panorama.
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="search_documents",
+                        arguments='{"query":"sesiones","document_type":"acta"}',
+                    )
+                ],
+            ),
+            ChatResult(content="ok", tool_calls=[]),
+        ]
+    )
+    search = RecordingSearch([_hit("Doc", "t")])
+    AskAgent(llm=llm, search=search, max_iters=5).ask("x")
+    assert search.document_types[0] == "acta"
 
 
 def test_corpus_overview_is_appended_to_system_prompt():
@@ -317,3 +351,96 @@ def test_agent_caps_and_ranks_sources():
 
     assert len(result.sources) == 5
     assert [s.url for s in result.sources] == [f"https://x.invalid/{i}" for i in (7, 6, 5, 4, 3)]
+
+
+def test_read_document_tool_drills_into_a_document():
+    reads = []
+
+    def fake_read(*, url, page=None):
+        reads.append((url, page))
+        return [{"page_start": 12, "page_end": 12, "text": "Partida 333: 1,000,000 devengado"}]
+
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="read_document",
+                        arguments='{"url":"https://x.invalid/doc","page":12}',
+                    )
+                ],
+            ),
+            ChatResult(content="La partida 333 registra 1,000,000 devengado.", tool_calls=[]),
+        ]
+    )
+    result = AskAgent(
+        llm=llm, search=RecordingSearch([]), max_iters=5, read_document=fake_read
+    ).ask("¿cuánto en la 333?")
+    assert reads == [("https://x.invalid/doc", 12)]
+    assert "1,000,000" in result.answer
+    offered = {t["function"]["name"] for t in llm.calls[0][1]}
+    assert "read_document" in offered
+    assert "document_coverage" not in offered  # not injected -> not offered
+
+
+def test_coverage_tool_counts_including_scanned():
+    captured = {}
+
+    def fake_cov(*, municipality=None, year=None, document_type=None):
+        captured.update(municipality=municipality, year=year, document_type=document_type)
+        return {"buscables": 0, "escaneados_sin_texto": 7, "total": 7}
+
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="document_coverage",
+                        arguments='{"municipality":"Tequila","year":2024}',
+                    )
+                ],
+            ),
+            ChatResult(content="Hay 7 documentos pero están escaneados.", tool_calls=[]),
+        ]
+    )
+    result = AskAgent(
+        llm=llm, search=RecordingSearch([]), max_iters=5, coverage=fake_cov
+    ).ask("¿hay algo de obra en Tequila 2024?")
+    assert captured == {"municipality": "Tequila", "year": 2024, "document_type": None}
+    assert "7" in result.answer
+    offered = {t["function"]["name"] for t in llm.calls[0][1]}
+    assert "document_coverage" in offered
+
+
+def test_unknown_or_unavailable_tool_does_not_crash():
+    # The model calls read_document but it isn't injected -> the loop returns a
+    # note and keeps going instead of raising.
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[ToolCall(id="1", name="read_document", arguments='{"url":"x"}')],
+            ),
+            ChatResult(content="ok", tool_calls=[]),
+        ]
+    )
+    result = AskAgent(llm=llm, search=RecordingSearch([]), max_iters=5).ask("x")
+    assert result.answer == "ok"
+
+
+def test_simple_intent_uses_tight_budget():
+    from open_data_jalisco.agent.router import Route
+
+    # Router says "simple"; the model keeps asking to search, but the loop must
+    # cap at the simple budget (2), not max_iters=5.
+    llm = ScriptedLLM([_tool_call("q1"), _tool_call("q2"), _tool_call("q3")])
+    search = RecordingSearch([_hit("Doc", "t")])
+    result = AskAgent(
+        llm=llm, search=search, max_iters=5, router=_StubRouter(Route("simple"))
+    ).ask("¿quién es el presidente municipal?")
+    assert result.iterations == 2
+    assert len(search.queries) == 2

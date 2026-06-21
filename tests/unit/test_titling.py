@@ -2,8 +2,10 @@
 # Copyright (C) 2026 open-data-jalisco contributors
 
 """Content-derived document titling (LLM-backed), driven by a fake LLM."""
+import pytest
+
 from open_data_jalisco.ports.llm import ChatResult
-from open_data_jalisco.titling import infer_title
+from open_data_jalisco.titling import infer_title, provisional_title
 
 
 class FakeLLM:
@@ -36,3 +38,27 @@ def test_infer_title_feeds_content_and_metadata_to_model():
     user_msg = llm.last_messages[-1].content
     assert "reglamento de construcción" in user_msg.lower()
     assert "Tala" in user_msg
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("06-06-22 PLAN MUNICIPAL DE DESARROLLO Y GOBERNANZA TEQUILA J",
+         "Plan Municipal de Desarrollo y Gobernanza Tequila"),
+        ("POA-OBRAS-PUBLICAS-E-INFRAESTRUCTURA-2023",
+         "Poa Obras Publicas e Infraestructura 2023"),
+        ("PADRON SEDESOL", "Padron Sedesol"),
+        ("documento_final.pdf", "Documento Final"),
+        ("Acta Comité Edilicio Enero", "Acta Comité Edilicio Enero"),
+        (None, None),
+        ("   ", None),
+    ],
+)
+def test_provisional_title(raw, expected):
+    assert provisional_title(raw) == expected
+
+
+def test_provisional_title_strips_leading_index_and_separators():
+    out = provisional_title("33._Reglamento_para_la_Igualdad_de_Tequila")
+    assert out.startswith("Reglamento para la Igualdad")
+    assert "_" not in out and "33" not in out

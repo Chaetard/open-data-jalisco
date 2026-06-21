@@ -13,6 +13,7 @@ from ..deps import (
     get_chunk_repository,
     get_document_repository,
     get_embedding_provider,
+    get_local_markers,
     get_reranker,
 )
 from ..schemas import SearchRequest, SearchResponse
@@ -37,6 +38,7 @@ def search_get(
     doc_repo: DocumentRepository = Depends(get_document_repository),
     embedder: EmbeddingProvider = Depends(get_embedding_provider),
     reranker: Reranker | None = Depends(get_reranker),
+    local_markers: frozenset[str] = Depends(get_local_markers),
 ) -> SearchResponse:
     """Legacy GET endpoint kept for compatibility. Prefer ``POST /search``."""
     return run_semantic_search(
@@ -51,6 +53,7 @@ def search_get(
         doc_repo=doc_repo,
         embedder=embedder,
         reranker=reranker,
+        local_markers=local_markers,
     )
 
 
@@ -61,6 +64,7 @@ def search_post(
     doc_repo: DocumentRepository = Depends(get_document_repository),
     embedder: EmbeddingProvider = Depends(get_embedding_provider),
     reranker: Reranker | None = Depends(get_reranker),
+    local_markers: frozenset[str] = Depends(get_local_markers),
 ) -> SearchResponse:
     """Primary search endpoint. Accepts a JSON body with query and filters."""
     return run_semantic_search(
@@ -75,6 +79,7 @@ def search_post(
         doc_repo=doc_repo,
         embedder=embedder,
         reranker=reranker,
+        local_markers=local_markers,
     )
 
 
@@ -85,6 +90,7 @@ def semantic_search_post(
     doc_repo: DocumentRepository = Depends(get_document_repository),
     embedder: EmbeddingProvider = Depends(get_embedding_provider),
     reranker: Reranker | None = Depends(get_reranker),
+    local_markers: frozenset[str] = Depends(get_local_markers),
 ) -> SearchResponse:
     """Explicit semantic-search route. Currently equivalent to ``POST /search``."""
     return run_semantic_search(
@@ -99,4 +105,5 @@ def semantic_search_post(
         doc_repo=doc_repo,
         embedder=embedder,
         reranker=reranker,
+        local_markers=local_markers,
     )

@@ -96,14 +96,16 @@ class PostgresChunkRepository:
         'spanish' config gives stemming + stopwords; numbers/acronyms pass
         through as literal lexemes. Returned float is ts_rank (higher = better),
         not a distance — the caller fuses it with the vector arm by rank, not by
-        raw value. ``literal_column('spanish')`` (not a bind param) so the
-        planner can use the matching GIN index from init_db.
+        raw value. ``literal_column('spanish')`` (not a bind param) and the
+        ``odj_unaccent`` wrapper mirror the indexed expression from init_db
+        exactly so the planner can use the matching GIN index.
         """
         fetch_n = max(limit * _OVERFETCH_FACTOR, _OVERFETCH_MIN)
         with self._sf() as session:
             config: ColumnElement[str] = literal_column("'spanish'")
-            tsv = func.to_tsvector(config, ChunkORM.text)
-            tsq = func.websearch_to_tsquery(config, query)
+            # Fold accents on BOTH sides so "adjudicacion" matches "adjudicación".
+            tsv = func.to_tsvector(config, func.odj_unaccent(ChunkORM.text))
+            tsq = func.websearch_to_tsquery(config, func.odj_unaccent(query))
             rank = func.ts_rank(tsv, tsq).label("rank")
             stmt = select(ChunkORM, rank).where(tsv.op("@@")(tsq))
             if municipality is not None:

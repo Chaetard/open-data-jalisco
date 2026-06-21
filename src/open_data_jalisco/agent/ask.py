@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 open-data-jalisco contributors
 
-"""Answering agent: a bounded ReAct loop over the semantic-search tool.
+"""Answering agent: a bounded ReAct loop over the document tools.
 
-The model is handed one tool — ``search_documents`` — and the question. It
-searches, reads the fragments, reasons, searches again if needed, and finally
-answers in prose citing the documents. Grounding is enforced by the prompt and
-by only ever feeding it real search results; the agent never sees the corpus
-except through the tool.
+The model is handed up to three tools — ``search_documents`` (hybrid search),
+``read_document`` (reopen one found document in depth) and ``document_coverage``
+(count what exists, incl. scanned/non-searchable docs) — plus the question. It
+searches, reads, reasons, searches again if needed, and finally answers in prose
+citing the documents. Grounding is enforced by the prompt and by only ever
+feeding it real tool results; the agent never sees the corpus except through the
+tools. read_document and document_coverage are optional (injected by the
+composition root) so the agent degrades to search-only when they're absent.
 """
 from __future__ import annotations
 
@@ -21,15 +24,21 @@ from typing import Any
 from ..api.schemas import SearchHit
 from ..ports.llm import ChatMessage, LLMClient
 from ..shared.logging import get_logger
+from ..titling import provisional_title
 from .router import SEARCH as ROUTER_SEARCH
+from .router import SIMPLE as ROUTER_SIMPLE
 from .router import Router
 
 logger = get_logger(__name__)
 
-# Called with keyword args (query, local_only, limit, municipality, year) -> hits.
-# Injected so the agent stays decoupled from the DB/embedder wiring and is trivial
-# to fake in tests.
+# All injected so the agent stays decoupled from the DB/embedder wiring and is
+# trivial to fake in tests.
+# search:   (query, local_only, limit, municipality, year, document_type) -> hits
+# read:     (url, page) -> list of {page_start, page_end, text} chunk dicts
+# coverage: (municipality, year, document_type) -> counts dict
 SearchFn = Callable[..., list[SearchHit]]
+ReadFn = Callable[..., list[dict[str, Any]]]
+CoverageFn = Callable[..., dict[str, Any]]
 
 _CORE_RULES = (
     "Eres un asistente de transparencia que responde sobre los documentos "
@@ -40,10 +49,16 @@ _CORE_RULES = (
     "son de varios, distingue de cuál es cada hallazgo. Reglas:\n"
     "\n"
     "FUENTE\n"
-    "- Responde SÓLO con lo obtenido vía la herramienta search_documents. No uses "
-    "conocimiento externo ni inventes datos.\n"
+    "- Responde SÓLO con lo obtenido vía las herramientas. No uses conocimiento "
+    "externo ni inventes datos.\n"
     "- Si una búsqueda no basta, reformúlala y busca de nuevo. Sé eficiente: 2 a 4 "
     "búsquedas suelen bastar. No repitas consultas equivalentes.\n"
+    "- Cuando un documento sea claramente el correcto pero el fragmento no baste "
+    "para citar la cifra/renglón/artículo exacto, usa read_document con su URL "
+    "para leerlo a fondo antes de afirmar nada.\n"
+    "- Si no encuentras algo, usa document_coverage para saber si de verdad no "
+    "existe o si existe pero está escaneado sin texto buscable (entonces dilo y "
+    "recomienda la PNT); no confundas «no lo encontré» con «no existe».\n"
     "\n"
     "REGLA DE ORO — ausencia de evidencia ≠ cero\n"
     "- NUNCA conviertas «no lo encontré» en «no existe», «es $0», «no se gastó» o "
@@ -177,13 +192,89 @@ _SEARCH_TOOL: dict[str, Any] = {
                         "Si no hay resultados, reintenta sin el filtro."
                     ),
                 },
+                "document_type": {
+                    "type": "string",
+                    "description": (
+                        "Acota a un tipo de documento. Usa EXACTAMENTE uno de los "
+                        "tipos listados en el PANORAMA DEL CORPUS. Omítelo para no "
+                        "filtrar por tipo. Si no hay resultados, reintenta sin él."
+                    ),
+                },
             },
             "required": ["query"],
         },
     },
 }
 
+_READ_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "read_document",
+        "description": (
+            "Lee a fondo UN documento ya encontrado, por su URL exacta (el campo "
+            "url de un resultado de search_documents). Devuelve su texto por "
+            "páginas. Úsalo cuando el fragmento de la búsqueda no basta: para ver "
+            "una tabla completa, el artículo entero, o la cifra exacta con su "
+            "renglón y página. No inventes la URL: usa una que ya te haya devuelto "
+            "search_documents."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL EXACTA del documento (campo url de un resultado).",
+                },
+                "page": {
+                    "type": "integer",
+                    "description": (
+                        "Página a leer (la que reportó el resultado). Devuelve esa "
+                        "página y sus vecinas. Omítela para leer el inicio."
+                    ),
+                },
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+_COVERAGE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "document_coverage",
+        "description": (
+            "Cuenta cuántos documentos existen para un municipio/año/tipo, "
+            "INCLUYENDO los escaneados sin texto buscable. No devuelve texto, solo "
+            "conteos. Úsalo cuando search_documents no encuentre algo: distingue "
+            "«no existe» de «existe pero está escaneado (no buscable)» o «no busqué "
+            "con el filtro correcto»."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "municipality": {
+                    "type": "string",
+                    "description": "Municipio del PANORAMA DEL CORPUS. Omítelo para todos.",
+                },
+                "year": {"type": "integer", "description": "Año, p.ej. 2024. Opcional."},
+                "document_type": {
+                    "type": "string",
+                    "description": "Tipo del PANORAMA DEL CORPUS. Opcional.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
 _TOOL_HIT_LIMIT = 6
+# Tight loop budget for a router-classified "simple" question: one search, then
+# the model must answer. Keeps quick factual lookups fast.
+_SIMPLE_MAX_ITERS = 2
+# read_document caps: enough to read a table/article in context without dumping a
+# whole multi-hundred-page document back into the model.
+_READ_MAX_CHUNKS = 8
+_READ_CHARS = 1200
 _SNIPPET_CHARS = 500
 # Length of the verifiable excerpt carried back to the UI per source.
 _EXCERPT_CHARS = 300
@@ -249,13 +340,20 @@ class AskAgent:
         corpus_overview: Callable[[], str] | None = None,
         corpus_municipalities: Callable[[], frozenset[str]] | None = None,
         router: Router | None = None,
+        read_document: ReadFn | None = None,
+        coverage: CoverageFn | None = None,
     ):
         self._llm = llm
         self._search = search
         self._max_iters = max_iters
         # Optional cheap intent classifier. When set, greetings/off-topic skip the
-        # search loop entirely. None = always search (original behavior).
+        # search loop entirely, and "simple" questions run on a tight budget. None
+        # = always run the full loop (original behavior).
         self._router = router
+        # Optional extra tools (injected by the composition root). When absent the
+        # agent is offered search only and behaves exactly as before.
+        self._read_document = read_document
+        self._coverage = coverage
         # Returns a compact description of what's in the corpus (municipalities,
         # years, doc types). Appended to the system prompt so the agent scopes
         # searches to real data instead of guessing. Cached by the caller.
@@ -274,11 +372,13 @@ class AskAgent:
     ) -> AskResult:
         mode = mode if mode in _SYSTEM_PROMPTS else DEFAULT_MODE
 
-        # Route first: a greeting or off-topic question shouldn't pay for a search
-        # loop. Only "search" falls through to the documents.
+        # Route first: greetings/off-topic are answered by the router itself; a
+        # "simple" factual question runs the loop but on a tight budget so it
+        # stays fast. search/simple fall through to the documents.
+        max_iters = self._max_iters
         if self._router is not None:
             route = self._router.classify(question, history)
-            if route.intent != ROUTER_SEARCH:
+            if route.intent not in (ROUTER_SEARCH, ROUTER_SIMPLE):
                 logger.info("ask: routed intent=%s, answered without search", route.intent)
                 return AskResult(
                     answer=route.reply,
@@ -287,6 +387,9 @@ class AskAgent:
                     model=self._router.model,
                     mode=mode,
                 )
+            if route.intent == ROUTER_SIMPLE:
+                max_iters = min(_SIMPLE_MAX_ITERS, self._max_iters)
+                logger.info("ask: routed intent=simple, tight budget=%d", max_iters)
 
         messages = [ChatMessage(role="system", content=self._system_prompt(mode))]
         # Replay prior turns so follow-ups ("¿y en Tequila?") keep context.
@@ -297,12 +400,15 @@ class AskAgent:
         # url -> (best score seen, Source). Dedupes across searches and lets us
         # keep only the most relevant few at the end.
         sources: dict[str, tuple[float, Source]] = {}
+        tools = self._tools()
         start = time.perf_counter()
-        logger.info("ask: start q=%r max_iters=%d", question[:120], self._max_iters)
+        logger.info(
+            "ask: start q=%r max_iters=%d tools=%d", question[:120], max_iters, len(tools)
+        )
 
-        for i in range(self._max_iters):
-            logger.info("ask: iter %d/%d -> llm", i + 1, self._max_iters)
-            result = self._llm.chat(messages, tools=[_SEARCH_TOOL])
+        for i in range(max_iters):
+            logger.info("ask: iter %d/%d -> llm", i + 1, max_iters)
+            result = self._llm.chat(messages, tools=tools)
             if not result.tool_calls:
                 answer = result.content or ""
                 selected = _select_sources(answer, sources, self._muni_stopwords())
@@ -329,18 +435,13 @@ class AskAgent:
                 )
             )
             for call in result.tool_calls:
-                hits = self._run_tool(call.name, call.arguments)
-                for hit in hits:
-                    score = hit.rerank_score if hit.rerank_score is not None else hit.score
-                    prev = sources.get(hit.document.official_url)
-                    if prev is None or score > prev[0]:
-                        sources[hit.document.official_url] = (score, _to_source(hit))
+                content = self._dispatch_tool(call.name, call.arguments, sources)
                 messages.append(
                     ChatMessage(
                         role="tool",
                         tool_call_id=call.id,
                         name=call.name,
-                        content=_format_hits(hits),
+                        content=content,
                     )
                 )
 
@@ -348,7 +449,7 @@ class AskAgent:
         # no tools this time so the model must conclude.
         logger.warning(
             "ask: hit max_iters=%d in %.1fs, forcing final answer",
-            self._max_iters,
+            max_iters,
             time.perf_counter() - start,
         )
         final = self._llm.chat(messages, tools=None)
@@ -356,10 +457,42 @@ class AskAgent:
         return AskResult(
             answer=answer,
             sources=_select_sources(answer, sources, self._muni_stopwords()),
-            iterations=self._max_iters,
+            iterations=max_iters,
             model=self._llm.model,
             mode=mode,
         )
+
+    def _tools(self) -> list[dict[str, Any]]:
+        tools = [_SEARCH_TOOL]
+        if self._read_document is not None:
+            tools.append(_READ_TOOL)
+        if self._coverage is not None:
+            tools.append(_COVERAGE_TOOL)
+        return tools
+
+    def _dispatch_tool(
+        self, name: str, arguments: str, sources: dict[str, tuple[float, Source]]
+    ) -> str:
+        """Run one tool call and return the string the model reads back.
+
+        search_documents also updates ``sources`` (the running citation pool);
+        the other tools only return text. Unknown/unavailable tools return a note
+        instead of raising, so a stray call can't crash the loop.
+        """
+        if name == "search_documents":
+            hits = self._run_search(arguments)
+            for hit in hits:
+                score = hit.rerank_score if hit.rerank_score is not None else hit.score
+                prev = sources.get(hit.document.official_url)
+                if prev is None or score > prev[0]:
+                    sources[hit.document.official_url] = (score, _to_source(hit))
+            return _format_hits(hits)
+        if name == "read_document" and self._read_document is not None:
+            return self._run_read(arguments)
+        if name == "document_coverage" and self._coverage is not None:
+            return self._run_coverage(arguments)
+        logger.info("ask: ignored unknown/unavailable tool %r", name)
+        return _json_note(f"herramienta no disponible: {name}")
 
     def _muni_stopwords(self) -> frozenset[str]:
         if self._corpus_municipalities is None:
@@ -381,9 +514,7 @@ class AskAgent:
             return prompt
         return f"{prompt}\n\n{overview}" if overview else prompt
 
-    def _run_tool(self, name: str, arguments: str) -> list[SearchHit]:
-        if name != "search_documents":
-            return []
+    def _run_search(self, arguments: str) -> list[SearchHit]:
         try:
             args = json.loads(arguments or "{}")
         except json.JSONDecodeError:
@@ -393,6 +524,7 @@ class AskAgent:
             return []
         local_only = bool(args.get("local_only", True))
         municipality = (str(args.get("municipality")).strip() or None) if args.get("municipality") else None
+        document_type = (str(args.get("document_type")).strip() or None) if args.get("document_type") else None
         try:
             year = int(args["year"]) if args.get("year") is not None else None
         except (TypeError, ValueError):
@@ -401,8 +533,8 @@ class AskAgent:
         # rerank) the "returned" line never prints, so without this a hang here
         # is invisible.
         logger.info(
-            "ask: search q=%r local_only=%s municipality=%s year=%s",
-            query, local_only, municipality, year,
+            "ask: search q=%r local_only=%s municipality=%s year=%s document_type=%s",
+            query, local_only, municipality, year, document_type,
         )
         hits = self._search(
             query=query,
@@ -410,9 +542,65 @@ class AskAgent:
             limit=_TOOL_HIT_LIMIT,
             municipality=municipality,
             year=year,
+            document_type=document_type,
         )
         logger.info("ask: search returned %d hits", len(hits))
         return hits
+
+    def _run_read(self, arguments: str) -> str:
+        assert self._read_document is not None
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            return _json_note("argumentos inválidos")
+        url = str(args.get("url", "")).strip()
+        if not url:
+            return _json_note("falta la url del documento")
+        try:
+            page = int(args["page"]) if args.get("page") is not None else None
+        except (TypeError, ValueError):
+            page = None
+        logger.info("ask: read_document url=%r page=%s", url[:120], page)
+        chunks = self._read_document(url=url, page=page)
+        logger.info("ask: read_document returned %d chunks", len(chunks))
+        if not chunks:
+            return _json_note(
+                "no se encontró un documento con esa URL exacta; usa una url tal "
+                "como la devolvió search_documents"
+            )
+        return json.dumps(
+            {
+                "paginas": [
+                    {
+                        "page": c.get("page_start"),
+                        "text": str(c.get("text", ""))[:_READ_CHARS],
+                    }
+                    for c in chunks[:_READ_MAX_CHUNKS]
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_coverage(self, arguments: str) -> str:
+        assert self._coverage is not None
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            return _json_note("argumentos inválidos")
+        municipality = (str(args.get("municipality")).strip() or None) if args.get("municipality") else None
+        document_type = (str(args.get("document_type")).strip() or None) if args.get("document_type") else None
+        try:
+            year = int(args["year"]) if args.get("year") is not None else None
+        except (TypeError, ValueError):
+            year = None
+        logger.info(
+            "ask: coverage municipality=%s year=%s document_type=%s",
+            municipality, year, document_type,
+        )
+        counts = self._coverage(
+            municipality=municipality, year=year, document_type=document_type
+        )
+        return json.dumps(counts, ensure_ascii=False)
 
 
 def _select_sources(
@@ -485,13 +673,20 @@ def _to_source(hit: SearchHit) -> Source:
         page_end=hit.chunk.page_end,
         jurisdiction=hit.document.jurisdiction,
         excerpt=_excerpt(hit.chunk.text),
-        inferred_title=hit.document.inferred_title,
+        # Prefer the real (LLM) content-derived title; when it hasn't been
+        # generated, fall back to a cheap DETERMINISTIC clean-up (no LLM call)
+        # so the chat shows something readable instead of a cryptic filename.
+        inferred_title=hit.document.inferred_title or provisional_title(hit.document.title),
     )
 
 
 def _excerpt(text: str) -> str:
     text = text.strip()
     return text if len(text) <= _EXCERPT_CHARS else text[:_EXCERPT_CHARS].rstrip() + "…"
+
+
+def _json_note(msg: str) -> str:
+    return json.dumps({"note": msg}, ensure_ascii=False)
 
 
 def _format_hits(hits: list[SearchHit]) -> str:

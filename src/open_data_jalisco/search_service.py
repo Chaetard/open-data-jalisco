@@ -79,6 +79,7 @@ def run_semantic_search(
     embedder: EmbeddingProvider,
     reranker: Reranker | None,
     year: int | None = None,
+    local_markers: frozenset[str] = frozenset(),
 ) -> SearchResponse:
     start = time.perf_counter()
     # Stage markers logged BEFORE each potentially-slow step (embed model, DB
@@ -124,7 +125,7 @@ def run_semantic_search(
         doc = doc_repo.get_by_id(chunk.document_id)
         if doc is None:
             continue
-        if local_only and infer_jurisdiction(doc.title) in _REFERENCE_LEVELS:
+        if local_only and infer_jurisdiction(doc.title, local_markers) in _REFERENCE_LEVELS:
             continue
         enriched.append((chunk, doc, distance))
 
@@ -148,7 +149,7 @@ def run_semantic_search(
                 score=max(0.0, 1.0 - distance) if distance is not None else 0.0,
                 rerank_score=rerank_scores[idx] if rerank_scores is not None else None,
                 chunk=chunk_to_out(chunk),
-                document=document_to_out(doc),
+                document=document_to_out(doc, local_markers),
             )
         )
 

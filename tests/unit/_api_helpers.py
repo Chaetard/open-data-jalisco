@@ -79,6 +79,33 @@ class FakeDocRepo:
     def find_current_by_url(self, *a, **kw) -> Document | None:
         return None
 
+    def find_current_by_official_url(self, official_url: str) -> Document | None:
+        return next(
+            (d for d in self._docs.values() if d.official_url == official_url), None
+        )
+
+    def count_documents(
+        self,
+        *,
+        municipality: str | None = None,
+        year: int | None = None,
+        document_type: str | None = None,
+        processing_status: str | None = None,
+        current_only: bool = True,
+    ) -> int:
+        def ok(d: Document) -> bool:
+            return all(
+                [
+                    municipality is None or d.municipality == municipality,
+                    year is None or d.year == year,
+                    document_type is None or d.document_type.value == document_type,
+                    processing_status is None
+                    or d.processing_status.value == processing_status,
+                ]
+            )
+
+        return sum(1 for d in self._docs.values() if ok(d))
+
     def insert_new_version(self, document: Document, supersedes: Document | None) -> Document:
         return document
 
