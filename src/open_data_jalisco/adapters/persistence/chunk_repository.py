@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ...domain.chunk import Chunk
 from ._mappers import chunk_to_domain, chunk_to_orm
-from .models import ChunkORM
+from .models import ChunkORM, DocumentORM
 
 # Why: SAPUMU (and similar portals) re-publish the same PDF under multiple
 # content_ids. Each copy lands as a distinct Document row (different URL, same
@@ -63,7 +63,14 @@ class PostgresChunkRepository:
         fetch_n = max(limit * _OVERFETCH_FACTOR, _OVERFETCH_MIN)
         with self._sf() as session:
             distance = ChunkORM.embedding.cosine_distance(embedding).label("distance")
-            stmt = select(ChunkORM, distance).where(ChunkORM.embedding.isnot(None))
+            # Join documents + is_current so superseded versions' chunks never
+            # surface: re-ingesting an updated doc leaves the old version's chunks
+            # behind (different sha256, so dedupe_by_sha256 won't collapse them).
+            stmt = (
+                select(ChunkORM, distance)
+                .join(DocumentORM, DocumentORM.id == ChunkORM.document_id)
+                .where(ChunkORM.embedding.isnot(None), DocumentORM.is_current.is_(True))
+            )
             if municipality is not None:
                 stmt = stmt.where(ChunkORM.municipality == municipality)
             if document_type is not None:
@@ -107,7 +114,12 @@ class PostgresChunkRepository:
             tsv = func.to_tsvector(config, func.odj_unaccent(ChunkORM.text))
             tsq = func.websearch_to_tsquery(config, func.odj_unaccent(query))
             rank = func.ts_rank(tsv, tsq).label("rank")
-            stmt = select(ChunkORM, rank).where(tsv.op("@@")(tsq))
+            # See semantic_search: only current-version chunks are searchable.
+            stmt = (
+                select(ChunkORM, rank)
+                .join(DocumentORM, DocumentORM.id == ChunkORM.document_id)
+                .where(tsv.op("@@")(tsq), DocumentORM.is_current.is_(True))
+            )
             if municipality is not None:
                 stmt = stmt.where(ChunkORM.municipality == municipality)
             if document_type is not None:
