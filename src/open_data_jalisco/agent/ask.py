@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -74,9 +74,21 @@ _CORE_RULES = (
     "CUANDO EL DOCUMENTO NO ESTÁ EN EL CORPUS\n"
     "- Si tras buscar no encuentras el documento o el dato que la persona pide, "
     "recomiéndale SIEMPRE solicitarlo por la Plataforma Nacional de Transparencia "
-    "(PNT), que es el canal oficial para pedir información pública a la autoridad.\n"
-    "- Menciona además que este panel cuenta con una guía paso a paso, fácil de "
-    "seguir, para hacer esa solicitud en la PNT.\n"
+    "(PNT), el canal oficial para pedir información pública a la autoridad.\n"
+    "- No te quedes en «pídelo en la PNT»: explícale CÓMO hacerlo, desglosado y en "
+    "lenguaje claro, con estos puntos (usa una lista):\n"
+    "  1) SUJETO OBLIGADO probable: a qué dependencia o ayuntamiento conviene "
+    "dirigir la solicitud para este tema.\n"
+    "  2) QUÉ PEDIR exactamente: nombra los documentos concretos (contrato, "
+    "factura, acta, padrón, presupuesto, oficio…), no una pregunta abierta.\n"
+    "  3) CÓMO ACOTAR: periodo o ejercicio fiscal, municipio, área, número de "
+    "contrato/obra/expediente, y pedir formato digital abierto (PDF buscable, "
+    "CSV o XLSX).\n"
+    "  4) SEGUIMIENTO: guardar el folio que genera la PNT y, si la respuesta es "
+    "incompleta o niega sin fundamento, valorar un recurso de revisión.\n"
+    "- Cierra invitando a la GUÍA PNT paso a paso de este panel (incluye modelos "
+    "de solicitud listos para copiar). No inventes URLs ni plazos legales exactos; "
+    "si no estás seguro de un dato del trámite, dilo y remite a la guía.\n"
     "\n"
     "TONO — neutral, no acusatorio\n"
     "- Este es un servicio público. NO imputes irregularidades, dolo, desvío, "
@@ -299,7 +311,7 @@ _LIST_TOOL: dict[str, Any] = {
     },
 }
 
-_TOOL_HIT_LIMIT = 6
+_TOOL_HIT_LIMIT = 10
 # Tight loop budget for a router-classified "simple" question. 3 (not 2) leaves
 # room for the common two-tool chain — e.g. search then list_documents — plus a
 # final turn to actually compose the answer *with tools still offered*, instead
@@ -407,6 +419,28 @@ class AskAgent:
         mode: str = DEFAULT_MODE,
         history: list[tuple[str, str]] | None = None,
     ) -> AskResult:
+        """Blocking answer. Drives ``ask_stream`` and discards its progress
+        events, returning only the final result (its generator return value)."""
+        gen = self.ask_stream(question, mode=mode, history=history)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as stop:
+            return stop.value  # type: ignore[no-any-return]
+
+    def ask_stream(
+        self,
+        question: str,
+        *,
+        mode: str = DEFAULT_MODE,
+        history: list[tuple[str, str]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Same ReAct loop as ``ask`` but yields real progress events as it runs
+        (one ``run``/``done`` pair per tool call) and *returns* the ``AskResult``.
+
+        Events are plain dicts so the SSE endpoint can serialize them directly:
+        ``{"type": "step", "status": "run"|"done", "tool", "label", "count"?}``.
+        """
         mode = mode if mode in _SYSTEM_PROMPTS else DEFAULT_MODE
 
         # Route first: greetings/off-topic are answered by the router itself; a
@@ -472,7 +506,18 @@ class AskAgent:
                 )
             )
             for call in result.tool_calls:
-                content = self._dispatch_tool(call.name, call.arguments, sources)
+                label = self._tool_label(call.name, call.arguments)
+                url = self._tool_url(call.name, call.arguments)
+                yield {"type": "step", "status": "run", "tool": call.name, "label": label, "url": url}
+                content, meta = self._dispatch_tool(call.name, call.arguments, sources)
+                yield {
+                    "type": "step",
+                    "status": "done",
+                    "tool": call.name,
+                    "label": label,
+                    "url": url,
+                    "count": meta.get("count"),
+                }
                 messages.append(
                     ChatMessage(
                         role="tool",
@@ -527,12 +572,14 @@ class AskAgent:
 
     def _dispatch_tool(
         self, name: str, arguments: str, sources: dict[str, tuple[float, Source]]
-    ) -> str:
-        """Run one tool call and return the string the model reads back.
+    ) -> tuple[str, dict[str, Any]]:
+        """Run one tool call; return ``(content_for_model, meta)``.
 
-        search_documents also updates ``sources`` (the running citation pool);
-        the other tools only return text. Unknown/unavailable tools return a note
-        instead of raising, so a stray call can't crash the loop.
+        ``meta`` carries a small summary for the streaming UI (e.g. ``count`` of
+        hits) — the non-streaming caller just ignores it. search_documents also
+        updates ``sources`` (the running citation pool); the other tools only
+        return text. Unknown/unavailable tools return a note instead of raising,
+        so a stray call can't crash the loop.
         """
         if name == "search_documents":
             hits = self._run_search(arguments)
@@ -541,15 +588,54 @@ class AskAgent:
                 prev = sources.get(hit.document.official_url)
                 if prev is None or score > prev[0]:
                     sources[hit.document.official_url] = (score, _to_source(hit))
-            return _format_hits(hits)
+            return _format_hits(hits), {"count": len(hits)}
         if name == "read_document" and self._read_document is not None:
-            return self._run_read(arguments)
+            return self._run_read(arguments), {}
         if name == "document_coverage" and self._coverage is not None:
-            return self._run_coverage(arguments)
+            return self._run_coverage(arguments), {}
         if name == "list_documents" and self._list_documents is not None:
-            return self._run_list(arguments)
+            return self._run_list(arguments), {}
         logger.info("ask: ignored unknown/unavailable tool %r", name)
-        return _json_note(f"herramienta no disponible: {name}")
+        return _json_note(f"herramienta no disponible: {name}"), {}
+
+    @staticmethod
+    def _tool_label(name: str, arguments: str) -> str:
+        """Human-readable activity line for the streaming UI."""
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        if name == "search_documents":
+            query = str(args.get("query", "")).strip()
+            label = f"Buscando «{query}»" if query else "Buscando en los documentos"
+            municipality = str(args.get("municipality") or "").strip()
+            if municipality:
+                label += f" · {municipality}"
+            if args.get("year"):
+                label += f" · {args['year']}"
+            return label
+        if name == "read_document":
+            url = str(args.get("url", "")).strip()
+            filename = url.rsplit("/", 1)[-1] if url else ""
+            return f"Leyendo {filename}" if filename else "Leyendo un documento"
+        if name == "document_coverage":
+            return "Revisando la cobertura del corpus"
+        if name == "list_documents":
+            return "Listando documentos disponibles"
+        return f"Usando {name}"
+
+    @staticmethod
+    def _tool_url(name: str, arguments: str) -> str | None:
+        """The document URL a tool call touched, so the UI can link it. Only
+        read_document carries one; other tools return None."""
+        if name != "read_document":
+            return None
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            return None
+        url = str(args.get("url", "")).strip()
+        return url or None
 
     def _muni_stopwords(self) -> frozenset[str]:
         if self._corpus_municipalities is None:

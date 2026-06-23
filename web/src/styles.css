@@ -64,7 +64,11 @@
   line-height: 1.05;
 }
 
+/* Solo se ilumina: tinte tenue + un aro suave que late un par de veces y se
+   queda encendido sin moverse ni proyectar sombras estorbosas. --glow se
+   adapta al navbar claro u oscuro. */
 .pnt-nav-glow {
+  --glow: var(--color-brand);
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -72,62 +76,26 @@
   border-radius: 999px;
   margin-inline: -0.35rem;
   padding-inline: 0.65rem;
-  background: color-mix(in srgb, var(--color-brand) 14%, white);
+  background: color-mix(in srgb, var(--glow) 9%, transparent);
   color: var(--color-brand-strong) !important;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-brand) 42%, transparent),
-    0 0 0 6px color-mix(in srgb, var(--color-brand) 14%, transparent),
-    0 12px 26px rgba(0, 138, 74, 0.2);
-  filter: drop-shadow(0 0 12px rgba(0, 138, 74, 0.58));
-  text-shadow: 0 0 18px rgba(0, 138, 74, 0.45);
-  animation: pnt-nav-pop 1.18s ease-in-out 10;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--glow) 26%, transparent);
+  animation: pnt-nav-glow 1.6s ease-in-out 3;
 }
 
 .text-white .pnt-nav-glow {
-  background: rgba(184, 239, 213, 0.18);
+  --glow: #b8efd5;
   color: #e9fff2 !important;
-  box-shadow:
-    0 0 0 1px rgba(184, 239, 213, 0.72),
-    0 0 0 6px rgba(184, 239, 213, 0.16),
-    0 12px 28px rgba(184, 239, 213, 0.2);
-  filter: drop-shadow(0 0 14px rgba(184, 239, 213, 0.76));
-  text-shadow: 0 0 18px rgba(184, 239, 213, 0.7);
 }
 
-.pnt-nav-glow::before {
-  content: "";
-  position: absolute;
-  inset: -0.45rem -0.55rem;
-  border: 2px solid color-mix(in srgb, var(--color-brand) 58%, transparent);
-  border-radius: 999px;
-  pointer-events: none;
-  animation: pnt-nav-ring 1.18s ease-out 10;
-}
-
-.text-white .pnt-nav-glow::before {
-  border-color: rgba(184, 239, 213, 0.72);
-}
-
-@keyframes pnt-nav-pop {
+@keyframes pnt-nav-glow {
   0%,
   100% {
-    transform: translateY(0) scale(1);
-    filter: drop-shadow(0 0 8px rgba(0, 138, 74, 0.42));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--glow) 26%, transparent);
   }
   50% {
-    transform: translateY(-1px) scale(1.08);
-    filter: drop-shadow(0 0 20px rgba(0, 138, 74, 0.9));
-  }
-}
-
-@keyframes pnt-nav-ring {
-  0% {
-    opacity: 0.95;
-    transform: scale(0.86);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.42);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--glow) 42%, transparent),
+      0 0 12px 1px color-mix(in srgb, var(--glow) 34%, transparent);
   }
 }
 
@@ -822,9 +790,68 @@ button {
 .thinking-float {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.85rem;
   padding: 0.15rem 0.2rem;
+}
+
+/* Timeline de actividad del agente: una línea conecta los pasos; el punto activo
+   late, los completados se llenan con un check. Reutilizado en el pie de la
+   respuesta (todos los pasos ya completados) para dejar los "testigos". */
+.thinking-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 1.4rem;
+}
+.thinking-timeline::before {
+  content: "";
+  position: absolute;
+  left: 0.34rem;
+  top: 0.45rem;
+  bottom: 0.45rem;
+  width: 1px;
+  background: var(--color-line);
+}
+.thinking-tl-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.1rem;
+}
+.thinking-tl-dot {
+  position: absolute;
+  left: -1.4rem;
+  top: 50%;
+  display: grid;
+  width: 0.78rem;
+  height: 0.78rem;
+  transform: translateY(-50%);
+  place-items: center;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  background: var(--color-paper);
+  color: #fff;
+}
+.thinking-tl-item.is-done .thinking-tl-dot {
+  border-color: var(--color-brand);
+  background: var(--color-brand);
+}
+.thinking-tl-item.is-run .thinking-tl-dot {
+  border-color: var(--color-brand);
+  animation: tl-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tl-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand) 24%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-brand) 6%, transparent);
+  }
 }
 .thinking-orb {
   position: relative;
@@ -850,15 +877,24 @@ button {
 .thinking-bar {
   position: relative;
   overflow: hidden;
+  background: color-mix(in srgb, var(--color-brand) 12%, var(--color-line));
 }
 .thinking-bar::after {
   content: "";
   position: absolute;
-  inset: 0 auto 0 -40%;
-  width: 40%;
+  inset: 0 auto 0 -50%;
+  width: 50%;
   border-radius: inherit;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-brand) 88%, white), transparent);
-  animation: thinking-sweep 1.15s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-brand) 70%, white),
+    color-mix(in srgb, var(--color-brand) 95%, white),
+    color-mix(in srgb, var(--color-brand) 70%, white),
+    transparent
+  );
+  box-shadow: 0 0 14px color-mix(in srgb, var(--color-brand) 55%, transparent);
+  animation: thinking-sweep 1.25s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 @keyframes orbit-pulse {
   0%,
@@ -897,11 +933,90 @@ button {
   }
 }
 
+/* Oculta el scrollbar manteniendo el scroll (Firefox, IE/Edge y WebKit). */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* ── Agente: entrada, acentos de color y scroll ─────────────────────────── */
+.turn-rise {
+  animation: turn-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes turn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Orb de marca en gradiente, reutilizado por el header de respuesta. */
+.assistant-orb {
+  position: relative;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(140deg, var(--color-brand) 0%, var(--color-brand-strong) 100%);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(0, 138, 74, 0.26);
+}
+
+/* Empty-state: orb con halo pulsante. */
+.intro-orb {
+  position: relative;
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(140deg, #1ba862 0%, var(--color-brand-strong) 100%);
+  color: #fff;
+  box-shadow: 0 18px 42px rgba(0, 138, 74, 0.28);
+}
+.intro-orb::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(0, 138, 74, 0.24), transparent 70%);
+  animation: orbit-pulse 2.4s ease-in-out infinite;
+}
+
+.intro-gradient {
+  background: linear-gradient(118deg, var(--color-ink) 28%, var(--color-brand) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Burbuja de la pregunta del usuario. */
+.user-bubble {
+  border: 1px solid var(--color-line);
+  border-radius: 14px 14px 14px 4px;
+  background: color-mix(in srgb, var(--color-brand-soft) 65%, var(--color-surface));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .thinking-bar::after,
   .caret,
   .resource-loading-bar,
-  .thinking-orb::before {
+  .thinking-orb::before,
+  .intro-orb::before,
+  .thinking-tl-item.is-run .thinking-tl-dot {
+    animation: none;
+  }
+  .turn-rise {
     animation: none;
   }
 }

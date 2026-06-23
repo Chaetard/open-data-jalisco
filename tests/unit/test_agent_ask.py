@@ -85,6 +85,35 @@ def test_agent_answers_without_searching():
     assert result.sources == []
 
 
+def test_ask_stream_emits_real_steps_and_returns_result():
+    llm = ScriptedLLM(
+        [
+            _tool_call("presupuesto 2021"),
+            ChatResult(content="El presupuesto fue X (Presupuesto 2021).", tool_calls=[]),
+        ]
+    )
+    search = RecordingSearch([_hit("Presupuesto 2021", "El presupuesto fue X")])
+    gen = AskAgent(llm=llm, search=search, max_iters=5).ask_stream("¿Cuánto fue el presupuesto?")
+
+    events = []
+    result = None
+    try:
+        while True:
+            events.append(next(gen))
+    except StopIteration as stop:
+        result = stop.value
+
+    # Un par run/done por la búsqueda, con etiqueta legible y conteo real.
+    assert [e["status"] for e in events] == ["run", "done"]
+    assert events[0]["tool"] == "search_documents"
+    assert "Buscando" in events[0]["label"]
+    assert events[1]["count"] == 1
+    # El valor de retorno del generador es el AskResult final.
+    assert result is not None
+    assert "X" in result.answer
+    assert [s.title for s in result.sources] == ["Presupuesto 2021"]
+
+
 def test_agent_is_bounded_and_forces_a_final_answer():
     # The model never stops asking to search; the loop must cap at max_iters and
     # then force one final, tool-less answer.

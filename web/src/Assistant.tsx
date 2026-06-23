@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   ArrowUpRight,
+  Check,
   Database,
   FileText,
-  Info,
   Link2,
   MapPin,
   PanelRightClose,
@@ -14,11 +16,14 @@ import {
   PowerOff,
   RotateCcw,
   Search,
+  Settings,
   Sparkles,
   Square,
+  type LucideIcon,
 } from "lucide-react";
 import { Marked } from "marked";
-import { api, ApiError, AskMode, AskResponse, AskSource, Source } from "./api";
+import { Link } from "react-router-dom";
+import { api, ApiError, AskMode, AskResponse, AskSource, AskStep, Source } from "./api";
 
 type Turn = {
   id: number;
@@ -30,6 +35,8 @@ type Turn = {
   iterations?: number;
   sources?: AskSource[];
   error?: string;
+  // Actividad real del agente recibida por streaming mientras piensa.
+  activity?: AskStep[];
 };
 
 type ResourceItem = {
@@ -329,6 +336,25 @@ Esta respuesta incluye texto largo, listas, citas y una tabla ancha para revisar
   };
 };
 
+// Emula el streaming real emitiendo unos pasos antes de la respuesta mock, para
+// poder afinar la UI de actividad sin gastar el agente.
+const mockAskStream = async (
+  question: string,
+  mode: AskMode,
+  signal: AbortSignal,
+  onStep: (step: AskStep) => void,
+): Promise<AskResponse> => {
+  const searchLabel = `Buscando «${question.slice(0, 40)}»`;
+  onStep({ type: "step", status: "run", tool: "search_documents", label: searchLabel });
+  await waitForMock(signal);
+  onStep({ type: "step", status: "done", tool: "search_documents", label: searchLabel, count: 8 });
+  const readLabel = "Leyendo reglamento-municipal.pdf";
+  onStep({ type: "step", status: "run", tool: "read_document", label: readLabel });
+  await waitForMock(signal);
+  onStep({ type: "step", status: "done", tool: "read_document", label: readLabel, count: null });
+  return mockAsk(question, mode, signal);
+};
+
 // Persistencia por sesión (sobrevive recargas, se borra al cerrar la pestaña —
 // que es justo el alcance de "sesión"). No hay backend: el contexto que ve el
 // agente se deriva de estos `turns` al enviar el historial.
@@ -373,14 +399,18 @@ export default function Assistant() {
   const [input, setInput] = useState("");
   const [inputError, setInputError] = useState("");
   const [mode, setMode] = useState<AskMode>("ciudadano");
-  const [modeHelpOpen, setModeHelpOpen] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingSuggestion, setPendingSuggestion] = useState("");
   const [municipalityFilter, setMunicipalityFilter] = useState("");
+  // Pregunta escrita en espera de decidir alcance (todos vs. un municipio).
+  const [pendingScopeQuestion, setPendingScopeQuestion] = useState("");
+  // Cacheado de sesión: una vez que el usuario eligió alcance, no se vuelve a preguntar.
+  const [scopeAsked, setScopeAsked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [agentAvailable, setAgentAvailable] = useState(true);
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const resources = useMemo(() => collectResources(turns), [turns]);
   const mockMode = useMemo(() => isAssistantMockEnabled(), []);
   const municipalities = useMemo(
@@ -394,8 +424,15 @@ export default function Assistant() {
   // Restored turns carry ids; start the counter past them so new turns don't collide.
   const idRef = useRef(turns.reduce((max, t) => Math.max(max, t.id), 0));
   const controllerRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // ¿El usuario está pegado al fondo? Gobierna el auto-scroll: si subió a leer
+  // historial no lo arrastramos; si está abajo, seguimos la respuesta que se
+  // genera. Cuántos turnos había, para detectar cuándo se agrega uno nuevo.
+  const nearBottomRef = useRef(true);
+  const prevLenRef = useRef(turns.length);
   // Latest turns, readable inside runAsk (a useCallback that must not depend on
   // `turns`). Lets every ask — including retries — replay prior Q→A for context.
   const turnsRef = useRef<Turn[]>(turns);
@@ -403,8 +440,29 @@ export default function Assistant() {
   useEffect(() => {
     turnsRef.current = turns;
     saveTurns(turns);
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    // Solo al ENVIAR un turno nuevo re-enganchamos al fondo y enfocamos el actual.
+    // El crecimiento por stream/typewriter lo sigue el ResizeObserver de abajo, así
+    // no peleamos con el usuario cuando sube a leer mensajes anteriores.
+    if (turns.length > prevLenRef.current) {
+      nearBottomRef.current = true;
+      bottomRef.current?.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "end" });
+    }
+    prevLenRef.current = turns.length;
   }, [turns]);
+
+  // Stick-to-bottom estilo chat de IA: cuando el contenido crece (pasos del
+  // stream o el texto que se va escribiendo) y el usuario está pegado al fondo,
+  // mantenemos la vista en el final para seguir la respuesta en curso.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   const clearChat = useCallback(() => {
     controllerRef.current?.abort();
@@ -413,6 +471,9 @@ export default function Assistant() {
     setLoading(false);
     setInputError("");
     setClearConfirmOpen(false);
+    setResourcesOpen(false);
+    setPendingScopeQuestion("");
+    setScopeAsked(false);
     try {
       window.sessionStorage.removeItem(CHAT_STORAGE_KEY);
     } catch {
@@ -453,6 +514,7 @@ export default function Assistant() {
     if (mode !== "ciudadano") {
       setPendingSuggestion("");
       setMunicipalityFilter("");
+      setPendingScopeQuestion("");
     }
   }, [mode]);
 
@@ -464,19 +526,42 @@ export default function Assistant() {
 
   const runAsk = useCallback(async (id: number, question: string, askMode: AskMode) => {
     setTurns((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, mode: askMode, status: "thinking", error: undefined } : t)),
+      prev.map((t) =>
+        t.id === id ? { ...t, mode: askMode, status: "thinking", error: undefined, activity: [] } : t,
+      ),
     );
     const controller = new AbortController();
     controllerRef.current = controller;
     setLoading(true);
+    // Cada evento del agente se funde en la actividad del turno: "run" agrega una
+    // fila; "done" marca como completada la última fila con la misma etiqueta.
+    const onStep = (step: AskStep) => {
+      setTurns((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          const activity = [...(t.activity ?? [])];
+          if (step.status === "run") {
+            activity.push(step);
+          } else {
+            for (let k = activity.length - 1; k >= 0; k--) {
+              if (activity[k].label === step.label && activity[k].status === "run") {
+                activity[k] = step;
+                break;
+              }
+            }
+          }
+          return { ...t, activity };
+        }),
+      );
+    };
     try {
       const history = turnsRef.current
         .filter((t) => t.id !== id && t.status === "done" && t.answer)
         .slice(-3)
         .map((t) => ({ question: t.question, answer: t.answer as string }));
       const res: AskResponse = mockMode
-        ? await mockAsk(question, askMode, controller.signal)
-        : await api.agent.ask(question, askMode, history, { signal: controller.signal });
+        ? await mockAskStream(question, askMode, controller.signal, onStep)
+        : await api.agent.askStream(question, askMode, history, onStep, { signal: controller.signal });
       notifyPntMention(res.answer);
       setTurns((prev) =>
         prev.map((t) =>
@@ -547,22 +632,72 @@ export default function Assistant() {
     [submit],
   );
 
-  const askTechnicalVersion = useCallback(
+  // Pide al agente redactar una solicitud PNT lista para enviar, a partir de la
+  // pregunta original. El prompt detallado es también lo que se muestra como turno.
+  const draftPntRequest = useCallback(
     (question: string) => {
       if (loading) return;
+      const prompt =
+        `Redacta una solicitud de información lista para enviar por la Plataforma ` +
+        `Nacional de Transparencia (PNT) sobre: «${question}». Estructúrala con: ` +
+        `sujeto obligado probable, los documentos concretos a solicitar, el periodo ` +
+        `y el formato digital abierto, y al final cómo dar seguimiento (guardar el ` +
+        `folio y, si aplica, recurso de revisión). Lenguaje claro y respetuoso.`;
       const id = (idRef.current += 1);
-      setTurns((prev) => [...prev, { id, question, mode: "investigador", status: "thinking" }]);
-      void runAsk(id, question, "investigador");
+      setTurns((prev) => [...prev, { id, question: prompt, mode, status: "thinking" }]);
+      void runAsk(id, prompt, mode);
     },
-    [loading, runAsk],
+    [loading, mode, runAsk],
+  );
+
+  // Punto único de envío desde el composer: si es modo ciudadano y aún no se ha
+  // fijado un alcance (ni municipio elegido ni decisión cacheada), primero
+  // pregunta «¿todos o un municipio?» en vez de mandar a ciegas.
+  const handleSend = useCallback(
+    (raw: string) => {
+      if (loading) return;
+      const question = raw.trim();
+      if (question.length < 3) {
+        setInputError("Escribe una pregunta de al menos 3 caracteres.");
+        return;
+      }
+      if (mode === "ciudadano" && !municipalityFilter && !scopeAsked) {
+        setInputError("");
+        setPendingScopeQuestion(question);
+        return;
+      }
+      submit(raw);
+    },
+    [loading, mode, municipalityFilter, scopeAsked, submit],
+  );
+
+  const resolveScope = useCallback(
+    (question: string, municipality?: string) => {
+      if (municipality) setMunicipalityFilter(municipality);
+      else setScopeAsked(true);
+      setPendingScopeQuestion("");
+      submitSuggestion(question, municipality);
+    },
+    [submitSuggestion],
   );
 
   const stop = () => controllerRef.current?.abort();
 
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    nearBottomRef.current = distance < 120;
+    setShowScrollDown(distance > 280);
+  }, []);
+
+  const scrollToBottom = () =>
+    bottomRef.current?.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "end" });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="tech-grid min-h-0 flex-1 overflow-y-auto pb-64">
-        <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
+      <div ref={scrollRef} onScroll={handleScroll} className="tech-grid no-scrollbar min-h-0 flex-1 overflow-y-auto pb-64">
+        <div ref={contentRef} className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
           {turns.length === 0 ? (
             <Intro
               mode={mode}
@@ -581,7 +716,7 @@ export default function Assistant() {
                     key={turn.id}
                     turn={turn}
                     onRetry={() => runAsk(turn.id, turn.question, turn.mode)}
-                    onTechnical={() => askTechnicalVersion(turn.question)}
+                    onDraftRequest={() => draftPntRequest(turn.question)}
                     disabled={loading}
                   />
                 ))}
@@ -607,29 +742,43 @@ export default function Assistant() {
         onConfirm={clearChat}
       />
 
+      {showScrollDown ? (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="turn-rise fixed bottom-28 left-1/2 z-40 grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full border border-line-strong bg-surface/95 text-muted shadow-[0_10px_30px_rgba(21,32,26,0.18)] backdrop-blur transition hover:text-ink"
+          aria-label="Bajar al final"
+          title="Bajar al final"
+        >
+          <ArrowDown className="h-4 w-4" />
+        </button>
+      ) : null}
+
       <div className="assistant-composer-dock pointer-events-none fixed inset-x-0 bottom-0 z-40 pb-4">
         <div className="relative z-10 mx-auto w-full max-w-5xl px-4 sm:px-6">
           {!agentAvailable ? (
             <Unavailable onRetry={() => setAgentAvailable(true)} />
           ) : (
             <>
-              <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-line-strong bg-surface/95 p-2 shadow-[0_18px_45px_rgba(21,32,26,0.16)] backdrop-blur focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
-                <ModeSwitch
-                  mode={mode}
-                  onChange={setMode}
-                  disabled={loading}
-                  helpOpen={modeHelpOpen}
-                  onHelpToggle={() => setModeHelpOpen((open) => !open)}
-                  onHelpClose={() => setModeHelpOpen(false)}
-                />
-                {mode === "ciudadano" ? (
-                  <ComposerMunicipalityFilter
-                    value={municipalityFilter}
+              {pendingScopeQuestion ? (
+                <div className="pointer-events-auto mb-2">
+                  <MunicipalityMenu
+                    question={pendingScopeQuestion}
                     municipalities={municipalities}
-                    onChange={setMunicipalityFilter}
-                    disabled={loading}
+                    onSubmit={resolveScope}
+                    onCancel={() => setPendingScopeQuestion("")}
                   />
-                ) : null}
+                </div>
+              ) : null}
+              <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-line-strong bg-surface/95 p-2 shadow-[0_18px_45px_rgba(21,32,26,0.16)] backdrop-blur focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
+                <ComposerSettings
+                  mode={mode}
+                  onModeChange={setMode}
+                  municipality={municipalityFilter}
+                  municipalities={municipalities}
+                  onMunicipalityChange={setMunicipalityFilter}
+                  disabled={loading}
+                />
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -637,7 +786,7 @@ export default function Assistant() {
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
-                      submit(input);
+                      handleSend(input);
                     }
                   }}
                   onInput={(event) => {
@@ -647,13 +796,13 @@ export default function Assistant() {
                   }}
                   rows={1}
                   placeholder="Pregunta sobre trámites, presupuestos, reglamentos…"
-                  className="h-10 max-h-40 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm leading-5 outline-none placeholder:text-faint"
+                  className="max-h-40 min-w-0 flex-1 resize-none bg-transparent px-1 py-2 text-[15px] leading-6 outline-none placeholder:text-faint"
                 />
                 {loading ? (
                   <button
                     type="button"
                     onClick={stop}
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-line-strong text-muted transition hover:bg-paper hover:text-ink"
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line-strong text-muted transition hover:bg-paper hover:text-ink"
                     aria-label="Detener"
                     title="Detener"
                   >
@@ -662,9 +811,9 @@ export default function Assistant() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => submit(input)}
+                    onClick={() => handleSend(input)}
                     disabled={input.trim().length < 3}
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-brand-strong text-white transition enabled:hover:bg-brand disabled:opacity-40"
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-strong text-white shadow-[0_6px_16px_rgba(0,138,74,0.26)] transition enabled:hover:opacity-90 disabled:opacity-40 disabled:shadow-none"
                     aria-label="Preguntar"
                     title="Preguntar"
                   >
@@ -704,8 +853,11 @@ function Intro({
   disabled: boolean;
 }) {
   return (
-    <div className="mx-auto flex min-h-[46vh] max-w-3xl flex-col items-center justify-center py-12 text-center sm:py-16">
-      <h1 className="font-display text-4xl font-medium leading-tight tracking-tight sm:text-5xl">
+    <div className="mx-auto flex max-w-3xl flex-col items-center justify-start pt-4 text-center sm:pt-8">
+      <span className="intro-orb turn-rise" aria-hidden>
+        <Sparkles className="h-5 w-5" />
+      </span>
+      <h1 className="intro-gradient mt-4 font-display text-4xl font-medium leading-tight tracking-tight sm:text-5xl">
         Pregúntale a los documentos
       </h1>
       <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-muted sm:text-[17px]">
@@ -715,7 +867,7 @@ function Intro({
       </p>
 
       {mode === "ciudadano" ? (
-        <div className="mt-8 w-full max-w-3xl text-left">
+        <div className="mt-9 w-full max-w-3xl text-left">
           {pendingSuggestion ? (
             <MunicipalityMenu
               question={pendingSuggestion}
@@ -724,22 +876,22 @@ function Intro({
               onCancel={onCancelSuggestion}
             />
           ) : (
-            <div className="space-y-2">
-              {suggestedQuestions.map((question, index) => (
-                <button
-                  key={question}
-                  type="button"
-                  onClick={() => onPickSuggestion(question)}
-                  disabled={disabled}
-                  className="group flex w-full items-start gap-3 rounded-xl border border-line bg-surface/80 px-4 py-3 text-left text-sm leading-5 text-muted transition hover:border-line-strong hover:bg-surface hover:text-ink disabled:opacity-50"
-                >
-                  <span className="mt-0.5 font-mono text-[11px] text-faint transition group-hover:text-brand">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span className="flex-1">{question}</span>
-                  <ArrowUp className="mt-0.5 h-4 w-4 shrink-0 rotate-45 text-faint transition group-hover:text-brand" />
-                </button>
-              ))}
+            <div className="grid gap-2.5 sm:grid-cols-3">
+                {suggestedQuestions.map((question, index) => (
+                  <button
+                    key={question}
+                    type="button"
+                    onClick={() => onPickSuggestion(question)}
+                    disabled={disabled}
+                    className="group flex h-full flex-col gap-3 rounded-2xl border border-line bg-surface/80 p-4 text-left text-sm leading-5 text-muted transition hover:-translate-y-0.5 hover:border-brand/40 hover:bg-surface hover:text-ink hover:shadow-[0_12px_30px_rgba(21,32,26,0.1)] disabled:opacity-50"
+                  >
+                    <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-soft font-mono text-[11px] font-semibold text-brand transition group-hover:bg-brand group-hover:text-white">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="flex-1">{question}</span>
+                    <ArrowUp className="h-4 w-4 rotate-45 text-faint transition group-hover:text-brand" />
+                  </button>
+                ))}
             </div>
           )}
         </div>
@@ -842,101 +994,117 @@ function MunicipalityMenu({
   );
 }
 
-function ComposerMunicipalityFilter({
-  value,
-  municipalities,
-  onChange,
-  disabled,
-}: {
-  value: string;
-  municipalities: string[];
-  onChange: (value: string) => void;
-  disabled: boolean;
-}) {
-  return (
-    <label className="relative hidden h-10 shrink-0 items-center sm:flex">
-      <span className="sr-only">Municipio para investigar</span>
-      <MapPin className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-faint" />
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        disabled={disabled}
-        className="h-10 max-w-[11rem] appearance-none rounded-lg border border-line-strong bg-paper pl-8 pr-7 text-xs font-semibold text-muted outline-none transition hover:bg-surface focus:border-brand focus:text-ink disabled:opacity-50"
-        title="Municipio para investigar"
-      >
-        <option value="">Todos</option>
-        {municipalities.map((municipality) => (
-          <option key={municipality} value={municipality}>
-            {municipality}
-          </option>
-        ))}
-      </select>
-      <span className="pointer-events-none absolute right-2 text-[10px] text-faint">⌄</span>
-    </label>
-  );
-}
-
-function ModeSwitch({
+// Engranaje del composer: condensa modo de respuesta + municipio en un popover,
+// para dejar la barra de entrada limpia. Un punto en el engranaje señala que hay
+// alguna configuración activa (modo técnico o municipio fijado).
+function ComposerSettings({
   mode,
-  onChange,
+  onModeChange,
+  municipality,
+  municipalities,
+  onMunicipalityChange,
   disabled,
-  helpOpen,
-  onHelpToggle,
-  onHelpClose,
 }: {
   mode: AskMode;
-  onChange: (mode: AskMode) => void;
+  onModeChange: (mode: AskMode) => void;
+  municipality: string;
+  municipalities: string[];
+  onMunicipalityChange: (value: string) => void;
   disabled: boolean;
-  helpOpen: boolean;
-  onHelpToggle: () => void;
-  onHelpClose: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const customized = mode !== "ciudadano" || !!municipality;
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [open]);
+
   return (
-    <div className="relative flex h-10 shrink-0 items-center gap-1">
-      <div className="flex h-9 items-center rounded-lg border border-line-strong bg-paper p-0.5">
-        {(["ciudadano", "investigador"] as AskMode[]).map((option) => (
-          <button
-            key={option}
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange(option)}
-            className={`h-8 rounded-md px-2 text-xs font-semibold transition disabled:opacity-50 ${
-              mode === option ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"
-            }`}
-          >
-            {modeLabel[option]}
-          </button>
-        ))}
-      </div>
+    <div ref={ref} className="relative shrink-0">
       <button
         type="button"
-        onClick={onHelpToggle}
-        className="grid h-9 w-8 place-items-center rounded-md text-faint transition hover:bg-paper hover:text-ink"
-        aria-label="Info sobre modos"
-        aria-expanded={helpOpen}
-        aria-controls="assistant-mode-help"
+        onClick={() => setOpen((value) => !value)}
+        disabled={disabled}
+        aria-label="Configuración de la consulta"
+        aria-expanded={open}
+        title="Configuración"
+        className={`relative grid h-10 w-10 place-items-center rounded-xl border transition disabled:opacity-50 ${
+          open
+            ? "border-brand bg-brand-soft text-brand"
+            : "border-line-strong text-muted hover:bg-paper hover:text-ink"
+        }`}
       >
-        <Info className="h-3.5 w-3.5" />
+        <Settings className={`h-4 w-4 transition-transform ${open ? "rotate-45" : ""}`} />
+        {customized && !open ? (
+          <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-brand" />
+        ) : null}
       </button>
-      {helpOpen ? (
-        <div
-          id="assistant-mode-help"
-          className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-lg border border-line-strong bg-surface p-3 text-xs leading-5 text-muted shadow-[0_14px_35px_rgba(21,32,26,0.16)]"
-        >
-          <button
-            type="button"
-            onClick={onHelpClose}
-            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-md text-faint transition hover:bg-paper hover:text-ink"
-            aria-label="Cerrar info"
-          >
-            ×
-          </button>
-          <p className="pr-6">
-            <strong className="text-ink">Ciudadano</strong>: respuesta breve y simple.
+
+      {open ? (
+        <div className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-line-strong bg-surface p-3 shadow-[0_14px_35px_rgba(21,32,26,0.18)]">
+          <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.14em] text-faint">
+            Modo de respuesta
           </p>
-          <p className="mt-1 pr-6">
-            <strong className="text-ink">Tecnico</strong>: mas detalle, evidencia y trazabilidad.
-          </p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(["ciudadano", "investigador"] as AskMode[]).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => onModeChange(option)}
+                className={`rounded-lg border px-2.5 py-2 text-left transition ${
+                  mode === option
+                    ? "border-brand bg-brand-soft text-ink"
+                    : "border-line bg-paper text-muted hover:text-ink"
+                }`}
+              >
+                <span className="block text-xs font-semibold">{modeLabel[option]}</span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-faint">
+                  {option === "ciudadano" ? "Breve y simple" : "Detalle y trazabilidad"}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {mode === "ciudadano" ? (
+            <div className="mt-3">
+              <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.14em] text-faint">
+                Municipio
+              </p>
+              <label className="relative block">
+                <span className="sr-only">Municipio para consultar</span>
+                <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
+                <select
+                  value={municipality}
+                  onChange={(event) => onMunicipalityChange(event.target.value)}
+                  disabled={disabled}
+                  className="h-10 w-full appearance-none rounded-lg border border-line bg-paper pl-9 pr-8 text-sm text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-50"
+                >
+                  <option value="">Todos los municipios</option>
+                  {municipalities.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-faint">
+                  ⌄
+                </span>
+              </label>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -945,31 +1113,33 @@ function ModeSwitch({
 function TurnBlock({
   turn,
   onRetry,
-  onTechnical,
+  onDraftRequest,
   disabled,
 }: {
   turn: Turn;
   onRetry: () => void;
-  onTechnical: () => void;
+  onDraftRequest: () => void;
   disabled: boolean;
 }) {
   return (
-    <div className="space-y-4">
+    <div className="turn-rise space-y-4">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-line-strong font-mono text-[11px] text-faint">
           Tú
         </span>
-        <p className="font-display text-base leading-6">{turn.question}</p>
+        <p className="user-bubble flex-1 px-4 py-2.5 font-display text-base leading-6 text-ink">
+          {turn.question}
+        </p>
       </div>
 
       {turn.status === "thinking" ? (
-        <ThinkingIndicator />
+        <ThinkingIndicator steps={turn.activity ?? []} />
       ) : (
         <div className="assistant-answer-float">
           {turn.status === "error" ? (
           <ErrorBlock message={turn.error ?? "Error."} onRetry={onRetry} disabled={disabled} />
         ) : (
-          <AnswerBlock turn={turn} onTechnical={onTechnical} disabled={disabled} />
+          <AnswerBlock turn={turn} onDraftRequest={onDraftRequest} disabled={disabled} />
         )}
         </div>
       )}
@@ -977,7 +1147,51 @@ function TurnBlock({
   );
 }
 
-function ThinkingIndicator() {
+const STEP_ICONS: Record<string, LucideIcon> = {
+  search_documents: Search,
+  read_document: FileText,
+  document_coverage: Database,
+  list_documents: FileText,
+};
+
+function stepCountLabel(count: number) {
+  return `${count} ${count === 1 ? "resultado" : "resultados"}`;
+}
+
+// Una fila del timeline: punto de estado, ícono de la herramienta, etiqueta y
+// (si aplica) conteo. Compartida por el indicador en vivo y el pie de testigos.
+function TimelineItem({ step }: { step: AskStep }) {
+  const Icon = STEP_ICONS[step.tool] ?? Sparkles;
+  const done = step.status === "done";
+  return (
+    <li className={`thinking-tl-item ${done ? "is-done" : "is-run"}`}>
+      <span className="thinking-tl-dot">{done ? <Check className="h-2.5 w-2.5" /> : null}</span>
+      <Icon className="h-3.5 w-3.5 shrink-0 text-faint" />
+      {step.url ? (
+        <a
+          href={step.url}
+          target="_blank"
+          rel="noreferrer"
+          className="min-w-0 truncate font-medium text-brand underline decoration-brand/30 underline-offset-2 transition hover:decoration-brand"
+          title={step.url}
+        >
+          {step.label}
+        </a>
+      ) : (
+        <span className={`min-w-0 truncate ${done ? "text-muted" : "font-medium text-ink"}`}>
+          {step.label}
+        </span>
+      )}
+      {typeof step.count === "number" ? (
+        <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
+          {stepCountLabel(step.count)}
+        </span>
+      ) : null}
+    </li>
+  );
+}
+
+function ThinkingIndicator({ steps }: { steps: AskStep[] }) {
   const [messageIndex, setMessageIndex] = useState(0);
   const [seconds, setSeconds] = useState(0);
 
@@ -992,39 +1206,87 @@ function ThinkingIndicator() {
     };
   }, []);
 
+  // Mientras no llega ningún paso real (router/primer turno del LLM), se cicla un
+  // mensaje genérico; en cuanto el agente actúa, el titular y el ícono del orb
+  // reflejan su último paso real.
+  const last = steps[steps.length - 1];
+  const headline = last ? last.label : thinkingMessages[messageIndex];
+  const HeadIcon = last ? STEP_ICONS[last.tool] ?? Sparkles : Database;
+
   return (
     <div className="thinking-float">
       <div className="thinking-orb" aria-hidden>
-        <Database className="h-4 w-4" />
+        <HeadIcon className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-3 text-sm">
-          <span className="truncate font-medium text-ink">{thinkingMessages[messageIndex]}</span>
+          <span className="truncate font-medium text-ink">{headline}</span>
           <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-faint">{seconds}s</span>
         </div>
-        <div className="thinking-bar mt-3 h-1 rounded-full bg-line" />
+        {steps.length ? (
+          <ol className="thinking-timeline mt-3.5">
+            {steps.map((step, index) => (
+              <TimelineItem key={`${step.label}-${index}`} step={step} />
+            ))}
+          </ol>
+        ) : (
+          <div className="thinking-bar mt-3 h-1.5 rounded-full" />
+        )}
       </div>
     </div>
   );
 }
 
+// Pie de "testigos": los pasos que el agente ejecutó, dejados al final de la
+// respuesta. Colapsado por defecto para no estorbar; el resumen anuncia cuántos
+// pasos hubo y cuántos documentos abrió.
+function AgentTrace({ steps }: { steps: AskStep[] }) {
+  const done = steps.filter((s) => s.status === "done");
+  if (!done.length) return null;
+  const readCount = done.filter((s) => s.tool === "read_document").length;
+  const summary = [
+    `${done.length} ${done.length === 1 ? "paso" : "pasos"}`,
+    readCount ? `${readCount} ${readCount === 1 ? "documento leído" : "documentos leídos"}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <details className="mt-5 rounded-xl border border-line bg-paper/60 px-4 py-3">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-muted transition hover:text-ink">
+        <Activity className="h-3.5 w-3.5 text-brand" />
+        Cómo llegué a esto
+        <span className="font-mono text-[11px] font-normal text-faint">· {summary}</span>
+      </summary>
+      <ol className="thinking-timeline mt-3">
+        {done.map((step, index) => (
+          <TimelineItem key={`${step.label}-${index}`} step={step} />
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function AnswerBlock({
   turn,
-  onTechnical,
+  onDraftRequest,
   disabled,
 }: {
   turn: Turn;
-  onTechnical: () => void;
+  onDraftRequest: () => void;
   disabled: boolean;
 }) {
   const { shown, done } = useTypewriter(turn.answer ?? "");
   const sources = turn.sources ?? [];
   const renderedAnswer = useMemo(() => renderMarkdown(shown), [shown]);
+  const mentionsPnt = pntMentionPattern.test(turn.answer ?? "");
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint">
-        <Sparkles className="h-3.5 w-3.5 text-brand" />
+        <span className="assistant-orb" aria-hidden>
+          <Sparkles className="h-3.5 w-3.5" />
+        </span>
         <span className="font-mono">Asistente</span>
         <Sep />
         <span className="rounded-full border border-line px-2 py-0.5 font-mono">
@@ -1046,19 +1308,11 @@ function AnswerBlock({
         ) : null}
       </div>
 
+      {/* Testigos del stream, arriba: qué hizo el agente para llegar a esto. */}
+      <AgentTrace steps={turn.activity ?? []} />
+
       <div className="assistant-md" dangerouslySetInnerHTML={{ __html: renderedAnswer }} />
       {!done ? <span className="caret mt-1" aria-hidden /> : null}
-
-      {done && turn.mode === "ciudadano" ? (
-        <button
-          type="button"
-          onClick={onTechnical}
-          disabled={disabled}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-semibold text-muted transition enabled:hover:bg-paper enabled:hover:text-ink disabled:opacity-40"
-        >
-          Ver versión técnica <ArrowUpRight className="h-4 w-4" />
-        </button>
-      ) : null}
 
       {done && sources.length ? (
         <div className="mt-5">
@@ -1076,6 +1330,36 @@ function AnswerBlock({
       {done && !sources.length ? (
         <p className="mt-4 font-mono text-xs text-faint">Respuesta sin documento citado.</p>
       ) : null}
+
+      {done && mentionsPnt ? (
+        <div className="mt-5 rounded-xl border border-brand/30 bg-brand-soft p-4">
+          <div className="flex items-start gap-2.5">
+            <FileText className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink">¿No está en el corpus? Pídelo por la PNT</p>
+              <p className="mt-1 text-xs leading-5 text-muted">
+                Te redacto una solicitud lista para enviar, o sigue la guía paso a paso.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onDraftRequest}
+                  disabled={disabled}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-strong px-3 text-sm font-semibold text-white transition enabled:hover:bg-brand disabled:opacity-40"
+                >
+                  <Sparkles className="h-4 w-4" /> Redactar solicitud
+                </button>
+                <Link
+                  to="/pnt"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line-strong bg-paper px-3 text-sm font-semibold text-ink transition hover:bg-surface"
+                >
+                  Ver guía PNT <ArrowUpRight className="h-4 w-4" />
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1088,14 +1372,14 @@ function SourceCard({ index, source }: { index: number; source: AskSource }) {
       href={source.url}
       target="_blank"
       rel="noreferrer"
-      className="group flex gap-3 rounded-xl border border-line bg-paper p-3.5 transition hover:-translate-y-0.5 hover:border-line-strong hover:bg-surface"
+      className="group flex gap-2.5 rounded-lg border border-line bg-paper p-2.5 transition hover:border-line-strong hover:bg-surface"
     >
-      <span className="mt-0.5 shrink-0 font-mono text-xs text-faint">[{index}]</span>
+      <span className="mt-px shrink-0 font-mono text-[11px] text-faint">[{index}]</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold transition group-hover:text-brand">
+        <span className="block truncate text-[13px] font-semibold leading-5 transition group-hover:text-brand">
           {sourceTitle(source)}
         </span>
-        <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] uppercase tracking-wider text-faint">
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10px] uppercase tracking-wider text-faint">
           <span>{jurisdictionLabel[source.jurisdiction] ?? source.jurisdiction}</span>
           {page ? (
             <>
@@ -1105,12 +1389,12 @@ function SourceCard({ index, source }: { index: number; source: AskSource }) {
           ) : null}
         </span>
         {source.excerpt ? (
-          <span className="mt-3 block border-l-2 border-line-strong pl-3 text-xs leading-5 text-muted">
+          <span className="mt-1.5 line-clamp-2 block border-l-2 border-line-strong pl-2.5 text-[11px] leading-4 text-muted">
             “{source.excerpt}”
           </span>
         ) : null}
       </span>
-      <ArrowUpRight className="h-4 w-4 shrink-0 text-faint transition group-hover:text-brand" />
+      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-faint transition group-hover:text-brand" />
     </a>
   );
 }

@@ -150,6 +150,17 @@ export type AskResponse = {
   sources: AskSource[];
 };
 
+/** Real-time progress event emitted by the streaming agent (`/ask/stream`). */
+export type AskStep = {
+  type: "step";
+  status: "run" | "done";
+  tool: string;
+  label: string;
+  count?: number | null;
+  // URL del documento que tocó el paso (solo `read_document`); permite enlazarlo.
+  url?: string | null;
+};
+
 export type DocumentFilters = {
   source_id?: string;
   municipality?: string;
@@ -343,5 +354,63 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ question, mode, history }),
       }),
+
+    /**
+     * Streaming variant: resuelve con el `AskResponse` final pero invoca
+     * `onStep` con cada evento real del agente (búsqueda, lectura, …) conforme
+     * llega vía Server-Sent Events. Sin timeout: la conexión se mantiene viva
+     * mientras el agente trabaja; usa `signal` para cancelar (botón Detener).
+     */
+    askStream: async (
+      question: string,
+      mode: AskMode = "ciudadano",
+      history: AskHistoryTurn[] = [],
+      onStep: (step: AskStep) => void,
+      options?: { signal?: AbortSignal },
+    ): Promise<AskResponse> => {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/ask/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ question, mode, history }),
+          signal: options?.signal,
+        });
+      } catch {
+        throw new ApiError(0, options?.signal?.aborted ? "Solicitud cancelada." : "No se pudo conectar con la API.");
+      }
+      if (!response.ok || !response.body) {
+        throw await normalizeError(response);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer: AskResponse | null = null;
+
+      // SSE: los eventos se separan por línea en blanco; cada uno trae una línea `data:`.
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(5).trim());
+          if (event.type === "answer") {
+            answer = event as AskResponse;
+          } else if (event.type === "error") {
+            throw new ApiError(502, String(event.detail ?? "El asistente tuvo un problema."));
+          } else if (event.type === "step") {
+            onStep(event as AskStep);
+          }
+        }
+      }
+
+      if (!answer) throw new ApiError(0, "La respuesta del asistente se interrumpió.");
+      return answer;
+    },
   },
 };

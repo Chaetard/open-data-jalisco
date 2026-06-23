@@ -7,16 +7,27 @@ POST a question; the agent searches the municipal documents (possibly several
 times), reasons, and replies with a grounded answer plus the documents it used.
 Disabled (503) unless ``LLM_API_KEY`` is set — the rest of the API is unaffected.
 """
+import json
+from collections.abc import Iterator
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...agent import AskAgent
 from ...ports.llm import LLMError
+from ...shared.logging import get_logger
 from ..deps import get_ask_agent
 
+logger = get_logger(__name__)
+
 router = APIRouter(tags=["agent"])
+
+
+def _sse(event: dict) -> str:
+    """Serialize one event as a Server-Sent Events frame."""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 class HistoryTurn(BaseModel):
@@ -97,4 +108,62 @@ def ask(
             )
             for s in result.sources
         ],
+    )
+
+
+@router.post("/ask/stream")
+def ask_stream(
+    body: AskRequest,
+    agent: AskAgent | None = Depends(get_ask_agent),  # noqa: B008
+) -> StreamingResponse:
+    """Same as ``/ask`` but streams the agent's real activity as Server-Sent
+    Events: a ``step`` event per tool call (searching, reading, …) and a final
+    ``answer`` event with the grounded response and its sources.
+    """
+    if agent is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent not configured. Set LLM_API_KEY (and optionally LLM_MODEL).",
+        )
+
+    history = [(h.question, h.answer) for h in body.history]
+
+    def event_source() -> Iterator[str]:
+        gen = agent.ask_stream(body.question, mode=body.mode, history=history)
+        try:
+            while True:
+                yield _sse(next(gen))
+        except StopIteration as stop:
+            result = stop.value
+            yield _sse(
+                {
+                    "type": "answer",
+                    "answer": result.answer,
+                    "model": result.model,
+                    "mode": result.mode,
+                    "iterations": result.iterations,
+                    "sources": [
+                        {
+                            "title": s.title,
+                            "inferred_title": s.inferred_title,
+                            "url": s.url,
+                            "page_start": s.page_start,
+                            "page_end": s.page_end,
+                            "jurisdiction": s.jurisdiction,
+                            "excerpt": s.excerpt,
+                        }
+                        for s in result.sources
+                    ],
+                }
+            )
+        except LLMError as e:
+            yield _sse({"type": "error", "detail": f"Upstream LLM error: {e}"})
+        except Exception:  # noqa: BLE001 — never leak a traceback into the stream
+            logger.exception("ask/stream: agent failed")
+            yield _sse({"type": "error", "detail": "El asistente tuvo un problema. Intenta de nuevo."})
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
