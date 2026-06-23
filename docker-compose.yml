@@ -59,6 +59,34 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  # Actualizador automatico (OPCIONAL, apagado por defecto). Re-ingesta y
+  # re-procesa las fuentes en el horario que elijas. Solo arranca si pides el
+  # perfil:  docker compose --profile refresh up -d   y se configura en .env
+  # (variables REFRESH*). Reusa la misma imagen que `api` (trae el CLI odj).
+  refresh:
+    profiles: ["refresh"]
+    build:
+      context: .
+      args:
+        EXTRAS: ${API_EXTRAS:-}
+    container_name: odj_refresh
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-odj}:${POSTGRES_PASSWORD:-odj}@postgres:5432/${POSTGRES_DB:-open_data_jalisco}
+      HF_HOME: /app/data/hf_cache
+      HF_HUB_DISABLE_XET: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./datasets:/app/datasets
+      # Montado (no horneado): un usuario no-code puede ajustar el horario
+      # editando .env, sin reconstruir la imagen.
+      - ./infra/refresh.sh:/refresh.sh:ro
+    command: ["sh", "/refresh.sh"]
+
   web:
     build: ./web
     container_name: odj_web
