@@ -36,9 +36,11 @@ logger = get_logger(__name__)
 # search:   (query, local_only, limit, municipality, year, document_type) -> hits
 # read:     (url, page) -> list of {page_start, page_end, text} chunk dicts
 # coverage: (municipality, year, document_type) -> counts dict
+# list:     (municipality, year, document_type) -> list of {titulo, url, ...} dicts
 SearchFn = Callable[..., list[SearchHit]]
 ReadFn = Callable[..., list[dict[str, Any]]]
 CoverageFn = Callable[..., dict[str, Any]]
+ListFn = Callable[..., list[dict[str, Any]]]
 
 _CORE_RULES = (
     "Eres un asistente de transparencia que responde sobre los documentos "
@@ -267,10 +269,43 @@ _COVERAGE_TOOL: dict[str, Any] = {
     },
 }
 
+_LIST_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "list_documents",
+        "description": (
+            "Lista la FICHA (título, año, tipo, URL y si es buscable o está "
+            "escaneado) de los documentos de un municipio/año/tipo, para VER el "
+            "catálogo antes de buscar a ciegas. No devuelve el texto. Úsalo cuando "
+            "necesites saber QUÉ documentos existen —p.ej. «¿qué presupuestos de "
+            "2024 hay en Tequila?»— o para elegir cuál leer a fondo con "
+            "read_document. Distinto de document_coverage (eso solo cuenta)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "municipality": {
+                    "type": "string",
+                    "description": "Municipio del PANORAMA DEL CORPUS. Omítelo para todos.",
+                },
+                "year": {"type": "integer", "description": "Año, p.ej. 2024. Opcional."},
+                "document_type": {
+                    "type": "string",
+                    "description": "Tipo del PANORAMA DEL CORPUS. Opcional.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
 _TOOL_HIT_LIMIT = 6
-# Tight loop budget for a router-classified "simple" question: one search, then
-# the model must answer. Keeps quick factual lookups fast.
-_SIMPLE_MAX_ITERS = 2
+# Tight loop budget for a router-classified "simple" question. 3 (not 2) leaves
+# room for the common two-tool chain — e.g. search then list_documents — plus a
+# final turn to actually compose the answer *with tools still offered*, instead
+# of hitting the cap and being forced into a tool-less final turn (which some
+# models answer empty). Still tight enough to keep quick lookups fast.
+_SIMPLE_MAX_ITERS = 3
 # read_document caps: enough to read a table/article in context without dumping a
 # whole multi-hundred-page document back into the model.
 _READ_MAX_CHUNKS = 8
@@ -342,6 +377,7 @@ class AskAgent:
         router: Router | None = None,
         read_document: ReadFn | None = None,
         coverage: CoverageFn | None = None,
+        list_documents: ListFn | None = None,
     ):
         self._llm = llm
         self._search = search
@@ -354,6 +390,7 @@ class AskAgent:
         # agent is offered search only and behaves exactly as before.
         self._read_document = read_document
         self._coverage = coverage
+        self._list_documents = list_documents
         # Returns a compact description of what's in the corpus (municipalities,
         # years, doc types). Appended to the system prompt so the agent scopes
         # searches to real data instead of guessing. Cached by the caller.
@@ -446,11 +483,27 @@ class AskAgent:
                 )
 
         # Iterations exhausted: force a final answer with the evidence gathered,
-        # no tools this time so the model must conclude.
+        # no tools this time so the model must conclude. A tool-greedy model
+        # (e.g. Gemini) otherwise keeps trying to call a function and, with none
+        # offered, returns EMPTY content — so we add an explicit instruction to
+        # answer now in prose. This also steers it to the honest "no lo encontré
+        # → PNT" answer instead of the defeatist fallback string.
         logger.warning(
             "ask: hit max_iters=%d in %.1fs, forcing final answer",
             max_iters,
             time.perf_counter() - start,
+        )
+        messages.append(
+            ChatMessage(
+                role="user",
+                content=(
+                    "Ya no hay más búsquedas ni herramientas disponibles. Con la "
+                    "evidencia que YA reuniste, responde AHORA en prosa, sin llamar "
+                    "herramientas. Si no encontraste el dato, dilo con claridad "
+                    "(«No se encontró … en los documentos recuperados»), explica las "
+                    "posibles causas y recomienda solicitarlo por la PNT."
+                ),
+            )
         )
         final = self._llm.chat(messages, tools=None)
         answer = final.content or "No pude llegar a una respuesta con la evidencia encontrada."
@@ -468,6 +521,8 @@ class AskAgent:
             tools.append(_READ_TOOL)
         if self._coverage is not None:
             tools.append(_COVERAGE_TOOL)
+        if self._list_documents is not None:
+            tools.append(_LIST_TOOL)
         return tools
 
     def _dispatch_tool(
@@ -491,6 +546,8 @@ class AskAgent:
             return self._run_read(arguments)
         if name == "document_coverage" and self._coverage is not None:
             return self._run_coverage(arguments)
+        if name == "list_documents" and self._list_documents is not None:
+            return self._run_list(arguments)
         logger.info("ask: ignored unknown/unavailable tool %r", name)
         return _json_note(f"herramienta no disponible: {name}")
 
@@ -601,6 +658,33 @@ class AskAgent:
             municipality=municipality, year=year, document_type=document_type
         )
         return json.dumps(counts, ensure_ascii=False)
+
+    def _run_list(self, arguments: str) -> str:
+        assert self._list_documents is not None
+        try:
+            args = json.loads(arguments or "{}")
+        except json.JSONDecodeError:
+            return _json_note("argumentos inválidos")
+        municipality = (str(args.get("municipality")).strip() or None) if args.get("municipality") else None
+        document_type = (str(args.get("document_type")).strip() or None) if args.get("document_type") else None
+        try:
+            year = int(args["year"]) if args.get("year") is not None else None
+        except (TypeError, ValueError):
+            year = None
+        logger.info(
+            "ask: list_documents municipality=%s year=%s document_type=%s",
+            municipality, year, document_type,
+        )
+        docs = self._list_documents(
+            municipality=municipality, year=year, document_type=document_type
+        )
+        logger.info("ask: list_documents returned %d docs", len(docs))
+        if not docs:
+            return json.dumps(
+                {"documentos": [], "note": "sin documentos con esos filtros"},
+                ensure_ascii=False,
+            )
+        return json.dumps({"documentos": docs}, ensure_ascii=False)
 
 
 def _select_sources(

@@ -37,6 +37,17 @@ const jurisdictionLabel: Record<string, string> = {
 
 const displayTitle = (document: Document) => document.inferred_title || document.title;
 
+// El reranker (cross-encoder) devuelve un logit sin acotar (p.ej. -3.25 u 8.5);
+// multiplicarlo por 100 daba "-325%" u "850%". La sigmoide lo mapea a 0–100%.
+// El score vectorial ya viene en [0,1], así que solo se normaliza el rerank.
+const relevancePercent = (hit: SearchHit) => {
+  const pct =
+    hit.rerank_score != null
+      ? 1 / (1 + Math.exp(-hit.rerank_score))
+      : hit.score;
+  return Math.round(pct * 100);
+};
+
 const statusLabels: Record<string, string> = {
   pending: "Pendiente",
   extracted: "Extraído",
@@ -416,7 +427,7 @@ export default function Explorer() {
                         title="Afinidad semántica con tu búsqueda"
                       >
                         <span className="font-display text-xl tabular-nums">
-                          {((hit.rerank_score ?? hit.score) * 100).toFixed(0)}
+                          {relevancePercent(hit)}
                         </span>
                         <span className="text-xs text-faint">%</span>
                         <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">relevancia</p>

@@ -416,6 +416,40 @@ def test_coverage_tool_counts_including_scanned():
     assert "document_coverage" in offered
 
 
+def test_list_documents_tool_enumerates_the_catalog():
+    captured = {}
+
+    def fake_list(*, municipality=None, year=None, document_type=None):
+        captured.update(municipality=municipality, year=year, document_type=document_type)
+        return [
+            {"titulo": "Presupuesto 2024", "url": "https://x.invalid/p", "anio": 2024,
+             "tipo": "budget", "buscable": True},
+        ]
+
+    llm = ScriptedLLM(
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="list_documents",
+                        arguments='{"municipality":"Tequila","year":2024,"document_type":"budget"}',
+                    )
+                ],
+            ),
+            ChatResult(content="Hay un Presupuesto 2024.", tool_calls=[]),
+        ]
+    )
+    result = AskAgent(
+        llm=llm, search=RecordingSearch([]), max_iters=5, list_documents=fake_list
+    ).ask("¿qué presupuestos hay en Tequila 2024?")
+    assert captured == {"municipality": "Tequila", "year": 2024, "document_type": "budget"}
+    assert "Presupuesto 2024" in result.answer
+    offered = {t["function"]["name"] for t in llm.calls[0][1]}
+    assert "list_documents" in offered
+
+
 def test_unknown_or_unavailable_tool_does_not_crash():
     # The model calls read_document but it isn't injected -> the loop returns a
     # note and keeps going instead of raising.
@@ -436,11 +470,15 @@ def test_simple_intent_uses_tight_budget():
     from open_data_jalisco.agent.router import Route
 
     # Router says "simple"; the model keeps asking to search, but the loop must
-    # cap at the simple budget (2), not max_iters=5.
-    llm = ScriptedLLM([_tool_call("q1"), _tool_call("q2"), _tool_call("q3")])
+    # cap at the simple budget (3), not max_iters=5. The 4th scripted result is
+    # the forced tool-less final answer after the cap is hit.
+    llm = ScriptedLLM(
+        [_tool_call("q1"), _tool_call("q2"), _tool_call("q3"),
+         ChatResult(content="ok", tool_calls=[])]
+    )
     search = RecordingSearch([_hit("Doc", "t")])
     result = AskAgent(
         llm=llm, search=search, max_iters=5, router=_StubRouter(Route("simple"))
     ).ask("¿quién es el presidente municipal?")
-    assert result.iterations == 2
-    assert len(search.queries) == 2
+    assert result.iterations == 3
+    assert len(search.queries) == 3

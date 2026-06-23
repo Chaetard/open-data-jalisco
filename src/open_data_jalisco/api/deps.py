@@ -27,9 +27,14 @@ from ..ports.reranker import Reranker
 from ..search_service import run_semantic_search
 from ..shared.config import get_settings
 from ..shared.logging import get_logger
+from ..titling import provisional_title
 from .schemas import SearchHit
 
 logger = get_logger(__name__)
+
+# Cap on documents returned by the agent's list_documents tool: enough to show
+# the catalog for a municipality/year/type without flooding the model's context.
+_LIST_DOCS_LIMIT = 25
 
 
 @lru_cache
@@ -247,6 +252,31 @@ def get_ask_agent() -> AskAgent | None:
             "total": doc_repo.count_documents(**common),
         }
 
+    def list_documents(
+        *,
+        municipality: str | None = None,
+        year: int | None = None,
+        document_type: str | None = None,
+    ) -> list[dict[str, object]]:
+        docs = doc_repo.list_documents(
+            municipality=municipality,
+            year=year,
+            document_type=document_type,
+            limit=_LIST_DOCS_LIMIT,
+        )
+        return [
+            {
+                "titulo": d.inferred_title or provisional_title(d.title),
+                "url": d.official_url,
+                "anio": d.year,
+                "tipo": d.document_type.value,
+                # The agent must distinguish a searchable doc from a scanned one
+                # it can't read via search (mirrors document_coverage's split).
+                "buscable": d.processing_status.value == "indexed",
+            }
+            for d in docs
+        ]
+
     router_client = build_router_client()
     router = (
         Router(router_client, corpus_overview=corpus_overview)
@@ -263,4 +293,5 @@ def get_ask_agent() -> AskAgent | None:
         router=router,
         read_document=read_document,
         coverage=coverage,
+        list_documents=list_documents,
     )
