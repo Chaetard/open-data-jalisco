@@ -63,6 +63,10 @@ datasets/sources/*_candidates*.yml
 # Claude Code / agent-specific local settings
 .claude/
 
+# Local code-intelligence / editor tooling (per-machine, not project artifacts)
+.codegraph/
+.cursor/
+
 # Logs
 *.log
 logs/
