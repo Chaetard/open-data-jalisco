@@ -4,9 +4,11 @@
 from pathlib import Path
 
 from ...ports.text_extractor import ExtractedDocument, TextExtractor
+from .docx import DocxTextExtractor
 from .html import HtmlTextExtractor
 from .pdf import PdfTextExtractor
 from .plaintext import PlainTextExtractor
+from .xls import XlsTextExtractor
 from .xlsx import XlsxTextExtractor
 
 
@@ -38,6 +40,8 @@ def build_default_registry() -> ExtractorRegistry:
         [
             PdfTextExtractor(),
             XlsxTextExtractor(),
+            XlsTextExtractor(),
+            DocxTextExtractor(),
             HtmlTextExtractor(),
             PlainTextExtractor(),
         ]
