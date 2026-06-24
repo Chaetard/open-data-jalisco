@@ -10,6 +10,7 @@ from ..domain.chunk import Chunk
 from ..domain.document import Document
 from ..domain.jurisdiction import infer_jurisdiction
 from ..domain.source import Source
+from ..titling import provisional_title
 
 
 class SourceOut(BaseModel):
@@ -133,7 +134,10 @@ def document_to_out(
         source_id=d.source_id,
         sha256=d.sha256,
         title=d.title,
-        inferred_title=d.inferred_title,
+        # Fall back to the deterministic non-AI title (filename cleanup) when the
+        # LLM `infer-titles` job hasn't run, so search/Explorer show a readable
+        # title instead of a raw filename — same fallback the agent already uses.
+        inferred_title=d.inferred_title or provisional_title(d.title),
         document_type=d.document_type.value,
         municipality=d.municipality,
         year=d.year,
