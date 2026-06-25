@@ -147,14 +147,24 @@ class StructureAwareChunker:
             buckets.append("\n\n".join(current))
 
         candidates: list[ChunkCandidate] = []
-        for idx, text in enumerate(buckets):
-            candidates.append(
-                ChunkCandidate(
-                    chunk_index=idx,
-                    text=text,
-                    section_title=_detect_section_title(text),
+        idx = 0
+        for text in buckets:
+            section_title = _detect_section_title(text)
+            # A single paragraph can exceed max_chars (e.g. a DOCX table emitted
+            # as one block); the bucket loop above never splits it. Run every
+            # bucket through the same overlap splitter the paginated path uses so
+            # no chunk outgrows the embedder's token window and gets truncated.
+            for sub in _split_text_with_overlap(
+                text, max_chars=self._max, overlap=self._overlap
+            ):
+                candidates.append(
+                    ChunkCandidate(
+                        chunk_index=idx,
+                        text=sub,
+                        section_title=section_title,
+                    )
                 )
-            )
+                idx += 1
         return candidates
 
 

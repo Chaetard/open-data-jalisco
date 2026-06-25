@@ -52,6 +52,20 @@ def test_fallback_paragraph_chunking_for_no_pages():
         assert len(c.text) <= 250  # max + small slack from paragraph join
 
 
+def test_flat_splits_single_oversized_paragraph():
+    # A DOCX table is emitted as ONE block (no blank lines), so it arrives as a
+    # single paragraph far larger than max_chars. The flat path must still split
+    # it, or the tail overflows the embedder's token window and gets truncated.
+    one_block = " ".join(f"fila{i}|valor{i}" for i in range(4000))  # ~> 60k chars, no blank lines
+    extracted = ExtractedDocument(full_text=one_block, pages=[])
+    chunker = StructureAwareChunker(max_chars=1800, overlap=200, min_chars=120)
+    chunks = chunker.chunk(extracted)
+    assert len(chunks) > 1
+    for i, c in enumerate(chunks):
+        assert c.chunk_index == i
+        assert len(c.text) <= 1800  # never exceeds the embedder window
+
+
 def test_chunk_indices_are_sequential():
     pages = ["X" * 600 for _ in range(4)]
     chunker = StructureAwareChunker(max_chars=500, overlap=50, min_chars=100)
