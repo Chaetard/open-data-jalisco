@@ -175,6 +175,7 @@ El proyecto podrá aceptar donaciones voluntarias para cubrir costos técnicos (
 |---|---|
 | 📜 [docs/MANIFEST.md](docs/MANIFEST.md) | Manifiesto completo: propósito, principios, gobernanza, alcance, IA, contribuciones, sostenibilidad. |
 | 🔌 [docs/API.md](docs/API.md) | Referencia completa de la API pública: cada endpoint, parámetros, esquemas, errores y ejemplos curl. |
+| 📥 [docs/INDEXING.md](docs/INDEXING.md) | Cómo indexar una página/fuente nueva en tu instancia self-hosted: YAML de fuente, ingesta, procesado y verificación. |
 | 🖥️ [docs/FRONTEND_GUIDE.md](docs/FRONTEND_GUIDE.md) | Guía de integración frontend: endpoints, ejemplos JSON, flujos de prueba. |
 | 📝 [CHANGELOG.md](CHANGELOG.md) | Registro de cambios versionado (formato Keep a Changelog). |
 | 🧪 `--help` en CLI | Cada comando documenta sus opciones: `uv run open-data-jalisco --help`, `... sapumu --help`, `... discovered --help`. |
@@ -267,6 +268,9 @@ Comandos equivalentes vía `make up` / `make down` / `make logs`.
 
 > Para servir en un dominio con HTTPS, apunta el DNS a la máquina y pon
 > `SITE_ADDRESS=tu-dominio.com`. Caddy emite y renueva el certificado solo.
+
+> ¿Ya levantaste tu instancia y quieres indexar tu propio municipio o página?
+> Sigue [**docs/INDEXING.md**](docs/INDEXING.md): definir la fuente, ingestar y procesar.
 
 ## Setup (desarrollo)
 
